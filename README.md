@@ -1,4 +1,4 @@
-# MEEPSAT: MEEP Simulation and Analysis for Telescopes
+# MEEPSAT: MEEP Simulation and Analysis for Telescopes 🔭
 
 CMB telescopes observe the sky in a wavelength of roughly 10 to 1 mm, making diffraction from optical instrument a key factor to address. We introduce a publicly available FDTD Simulation package 
 "MEEPSAT" (based on MEEP) intended to help the design and characterization of current and future generation telescopes, including Taurus and Simons Observatory. 
