@@ -1,0 +1,15 @@
+# Ignore the output_files directory
+output_files/
+
+# Ignore all the meep container
+recipe_for_MEEP_installation/
+
+# Ignore all files with the following extensions
+*.err
+*.out
+*.mp4
+*.h5
+*.npy
+*.csv
+*.npz
+*.txt

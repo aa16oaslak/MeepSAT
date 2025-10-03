@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meepsat"
+version = "0.1.0"
+description = "MEEPSAT (MEEP Simulation and Analysis for Telescopes) is a Python-based framework for simulating and analyzing optical systems using the MEEP FDTD (Finite-Difference Time-Domain) library. This repository contains various modules for initializing, running, and analyzing 2D simulations, as well as visualizing the results."
+authors = [
+    {name = "Ashesh Abhisek Khatua", email = "aak25@hi.is"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "jupyter",
+    "numpy",
+    "matplotlib",
+    "scipy",
+    "pandas",
+    "h5py"
+]
+
+[project.urls]
+Homepage = "https://github.com/aa16oaslak/MeepSAT.git"
+Repository = "https://github.com/aa16oaslak/MeepSAT.git"
+
+[tool.setuptools.packages.find]
+include = ["meepsat*"]
+exclude = ["Tutorials*", "meep_variable_resolution*", "examples*"]
