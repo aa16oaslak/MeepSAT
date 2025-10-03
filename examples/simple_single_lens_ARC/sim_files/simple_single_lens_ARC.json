@@ -1,6 +1,6 @@
 {
     "simulation": {
-      "name": "single_lens_testing",
+      "name": "single_lens_testing_ARC",
       "parallel": "False",
       "primary_params": {
         "sim_type": "2D",
@@ -95,7 +95,7 @@
         "get_mp4": true,
         "image_every": 25,
         "Nfps": 12,
-        "movie_name": "single_lens_testing",
+        "movie_name": "single_lens_testing_ARC",
         "plotting_params": {
                 "Ez2_dB": {
                   "title": "Power (dB)",
@@ -111,7 +111,7 @@
               }
       },
       "epsilon_h5_file": {
-        "filename": "single_lens_testing"
+        "filename": "single_lens_testing_ARC"
       },
       "runtime": {
         "command": "until= 2500"

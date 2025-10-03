@@ -55,6 +55,13 @@ Due to the complex dependencies of the MEEP FDTD software, it is highly recommen
     ```
 
 3.  **Install this project from the repository:**
+
+    **For development installation (editable and **recommended** for collaborators to use this):**
+    ```bash
+    git clone https://github.com/aa16oaslak/MeepSAT.git
+    cd MEEPSAT_WFH
+    pip install -e .
+    ```
     
     **For public repository (once the project is public):**
     ```bash
@@ -72,12 +79,6 @@ Due to the complex dependencies of the MEEP FDTD software, it is highly recommen
     pip install git+ssh://git@github.com/aa16oaslak/MEEPSAT_WFH.git
     ```
     
-    **For development installation (editable and recommended for collaborators to use this):**
-    ```bash
-    git clone https://github.com/aa16oaslak/MeepSAT.git
-    cd MEEPSAT_WFH
-    pip install -e .
-    ```
 
 4. **Check if everything is working with MEEPSAT import or not**
     ```bash
