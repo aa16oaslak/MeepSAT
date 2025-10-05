@@ -59,7 +59,7 @@ Due to the complex dependencies of the MEEP FDTD software, it is highly recommen
     **For development installation (editable and **recommended** for collaborators to use this):**
     ```bash
     git clone https://github.com/aa16oaslak/MeepSAT.git
-    cd MEEPSAT_WFH
+    cd MeepSAT
     pip install -e .
     ```
     
@@ -70,13 +70,13 @@ Due to the complex dependencies of the MEEP FDTD software, it is highly recommen
     
     **For private repository (requires authentication):**
     ```bash
-    pip install git+https://'your_token'@github.com/aa16oaslak/MEEPSAT_WFH.git
+    pip install git+https://'your_token'@github.com/aa16oaslak/MeepSAT.git
     ```
     Replace ```'your_token' ``` with your PAT token generated in your github account
     
     **Alternative for private repository using SSH:**
     ```bash
-    pip install git+ssh://git@github.com/aa16oaslak/MEEPSAT_WFH.git
+    pip install git+ssh://git@github.com/aa16oaslak/MeepSAT.git
     ```
     
 
