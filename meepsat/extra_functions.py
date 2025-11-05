@@ -1,3 +1,61 @@
+import sys
+import os
+import site
+from pathlib import Path
+
+# First check for MEEPSAT_PATH environment variable (highest priority)
+meepsat_env_path = os.environ.get('MEEPSAT_PATH')
+if meepsat_env_path and os.path.exists(os.path.join(meepsat_env_path, 'meepsat')):
+    print(f"Using MEEPSAT from environment variable: {{meepsat_env_path}}")
+    main_dir = meepsat_env_path
+    meepsat_dir = os.path.join(main_dir, 'meepsat')
+    sys.path.append(main_dir)
+    sys.path.append(meepsat_dir)
+    meepsat_found = True
+else:
+    # Method 1: Try to import directly if MEEPSAT is installed properly
+    try:
+        import meepsat
+        print("MEEPSAT found in installed packages")
+        meepsat_dir = os.path.dirname(meepsat.__file__)
+        main_dir = os.path.dirname(meepsat_dir)
+        sys.path.append(meepsat_dir)  # Add meepsat directory to path for submodule imports
+        meepsat_found = True
+    except ImportError:
+        # Method 2: Try to find MEEPSAT in common locations
+        possible_paths = [
+            Path.cwd().parent,                     # Parent of current directory
+            Path.cwd(),                           # Current directory
+            Path(__file__).resolve().parent.parent,  # Parent of script directory
+            Path.home() / "Phd_work/MEEPSAT_WFH",      # User's home directory + common path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH'),   # HPC specific path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH')    # Another HPC specific path
+        ]
+        
+        meepsat_found = False
+        for path in possible_paths:
+            try:
+                meepsat_dir = path / "meepsat"
+                if meepsat_dir.exists():
+                    main_dir = str(path)
+                    meepsat_dir = str(meepsat_dir)
+                    sys.path.append(main_dir)
+                    sys.path.append(meepsat_dir)  # Critical: add meepsat directory for submodule imports
+                    print(f"MEEPSAT found at: {{meepsat_dir}}")
+                    meepsat_found = True
+                    break
+            except Exception as e:
+                print(f"Error checking path {{path}}: {{e}}")
+        
+        if not meepsat_found:
+            print("WARNING: MEEPSAT directory not found automatically.")
+            print("Please set the MEEPSAT_PATH environment variable before running.")
+            print("For example: export MEEPSAT_PATH=/path/to/MEEPSAT")
+            main_dir = "."
+            meepsat_dir = "./meepsat"
+            sys.path.append(main_dir)
+            sys.path.append(meepsat_dir)
+
 from typing import Callable
 import numpy as np
 

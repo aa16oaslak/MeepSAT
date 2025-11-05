@@ -1,3 +1,61 @@
+import sys
+import os
+import site
+from pathlib import Path
+
+# First check for MEEPSAT_PATH environment variable (highest priority)
+meepsat_env_path = os.environ.get('MEEPSAT_PATH')
+if meepsat_env_path and os.path.exists(os.path.join(meepsat_env_path, 'meepsat')):
+    print(f"Using MEEPSAT from environment variable: {{meepsat_env_path}}")
+    main_dir = meepsat_env_path
+    meepsat_dir = os.path.join(main_dir, 'meepsat')
+    sys.path.append(main_dir)
+    sys.path.append(meepsat_dir)
+    meepsat_found = True
+else:
+    # Method 1: Try to import directly if MEEPSAT is installed properly
+    try:
+        import meepsat
+        print("MEEPSAT found in installed packages")
+        meepsat_dir = os.path.dirname(meepsat.__file__)
+        main_dir = os.path.dirname(meepsat_dir)
+        sys.path.append(meepsat_dir)  # Add meepsat directory to path for submodule imports
+        meepsat_found = True
+    except ImportError:
+        # Method 2: Try to find MEEPSAT in common locations
+        possible_paths = [
+            Path.cwd().parent,                     # Parent of current directory
+            Path.cwd(),                           # Current directory
+            Path(__file__).resolve().parent.parent,  # Parent of script directory
+            Path.home() / "Phd_work/MEEPSAT_WFH",      # User's home directory + common path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH'),   # HPC specific path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH')    # Another HPC specific path
+        ]
+        
+        meepsat_found = False
+        for path in possible_paths:
+            try:
+                meepsat_dir = path / "meepsat"
+                if meepsat_dir.exists():
+                    main_dir = str(path)
+                    meepsat_dir = str(meepsat_dir)
+                    sys.path.append(main_dir)
+                    sys.path.append(meepsat_dir)  # Critical: add meepsat directory for submodule imports
+                    print(f"MEEPSAT found at: {{meepsat_dir}}")
+                    meepsat_found = True
+                    break
+            except Exception as e:
+                print(f"Error checking path {{path}}: {{e}}")
+        
+        if not meepsat_found:
+            print("WARNING: MEEPSAT directory not found automatically.")
+            print("Please set the MEEPSAT_PATH environment variable before running.")
+            print("For example: export MEEPSAT_PATH=/path/to/MEEPSAT")
+            main_dir = "."
+            meepsat_dir = "./meepsat"
+            sys.path.append(main_dir)
+            sys.path.append(meepsat_dir)
+
 import numpy as np
 import matplotlib.pyplot as plt
 import meep as mp
@@ -84,28 +142,60 @@ def get_MEEP_ff(simulation,
         plt.savefig(filename + '.png')
         plt.close()
 
-    if saveh5 :
-        # Enable parallel parameter in function signature first
-        if parallel:
-            from mpi4py import MPI
-            comm = MPI.COMM_WORLD
-            if not h5py.get_config().mpi:
-                raise ValueError("h5py was built without MPI support, can't use mpio driver")
+    # if saveh5 :
+    #     # Enable parallel parameter in function signature first
+    #     if parallel:
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         if not h5py.get_config().mpi:
+    #             raise ValueError("h5py was built without MPI support, can't use mpio driver")
             
-            with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
-                h.create_dataset('deg', data=angles, dtype='float64')
-                h.create_dataset('amplitudedB', data=ff_dB, dtype='float64')
-        else:
-            # Only have rank 0 create the file in non-parallel mode
-            from mpi4py import MPI
-            comm = MPI.COMM_WORLD
-            rank = comm.Get_rank()
+    #         with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
+    #             h.create_dataset('deg', data=angles, dtype='float64')
+    #             h.create_dataset('amplitudedB', data=ff_dB, dtype='float64')
+    #     else:
+    #         # Only have rank 0 create the file in non-parallel mode
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         rank = comm.Get_rank()
             
-            if rank == 0:
-                with h5py.File(filename + '.h5', 'w', libver='latest') as h:
-                    h.create_dataset('deg', data=angles, dtype='float64', compression='gzip')
-                    h.create_dataset('amplitudedB', data=ff_dB, dtype='float64', compression='gzip')
-            comm.barrier()  # Ensure all processes wait for file creation
+    #         if rank == 0:
+    #             with h5py.File(filename + '.h5', 'w', libver='latest') as h:
+    #                 h.create_dataset('deg', data=angles, dtype='float64', compression='gzip')
+    #                 h.create_dataset('amplitudedB', data=ff_dB, dtype='float64', compression='gzip')
+    #         comm.barrier()  # Ensure all processes wait for file creation
+
+    # return angles, ffmeep
+
+    # if saveh5:
+    #     # Replace h5py with numpy compressed save
+    #     if parallel:
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         rank = comm.Get_rank()
+            
+    #         if rank == 0:
+    #             np.savez_compressed(filename + '.npz', 
+    #                               deg=angles, 
+    #                               amplitudedB=ff_dB)
+    #             print(f"Far field data saved to {filename}.npz")
+    #         comm.barrier()
+    #     else:
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         rank = comm.Get_rank()
+            
+    #         if rank == 0:
+    #             np.savez_compressed(filename + '.npz', 
+    #                               deg=angles, 
+    #                               amplitudedB=ff_dB)
+    #             print(f"Far field data saved to {filename}.npz")
+    #         comm.barrier()
+    if saveh5:
+        np.savez_compressed(filename + '.npz', 
+                          deg=angles, 
+                          amplitudedB=ff_dB)
+        print(f"Far field data saved to {filename}.npz")
 
     return angles, ffmeep
 
@@ -209,35 +299,64 @@ def get_complex_field(sim,
             plt.savefig(filename + '.png')
             plt.close()
 
-        if saveh5 : 
-            if parallel :
-                from mpi4py import MPI
-                comm = MPI.COMM_WORLD
-                rank = comm.Get_rank()
+        # if saveh5 : 
+        #     if parallel :
+        #         from mpi4py import MPI
+        #         comm = MPI.COMM_WORLD
+        #         rank = comm.Get_rank()
                 
-                if not h5py.get_config().mpi:
-                    raise ValueError("h5py was built without MPI support, can't use mpio driver")
+        #         if not h5py.get_config().mpi:
+        #             raise ValueError("h5py was built without MPI support, can't use mpio driver")
                 
-                try:
-                    with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
-                        h.create_dataset('y', data=y, dtype='float64')
-                        h.create_dataset('amplitude', data=amplitude, dtype='float64')
-                        h.create_dataset('phase', data=phase, dtype='float64')
-                except OSError as e:
-                    # Fallback to serial writing from rank 0 if MPI file creation fails
-                    if rank == 0:
-                        print(f"MPI file creation failed: {e}")
-                        print("Falling back to serial file writing...")
-                        with h5py.File(filename + '.h5', 'w') as h:
-                            h.create_dataset('y', data=y, dtype='float64', compression='gzip')
-                            h.create_dataset('amplitude', data=amplitude, dtype='float64', compression='gzip')
-                            h.create_dataset('phase', data=phase, dtype='float64', compression='gzip')
-                    comm.barrier()  # Ensure all processes wait for file creation
-            else: 
-                with h5py.File(filename + '.h5', 'w') as h:
-                    h.create_dataset('y', data=y, dtype='float64', compression='gzip')
-                    h.create_dataset('amplitude', data=amplitude, dtype='float64', compression='gzip')
-                    h.create_dataset('phase', data=phase, dtype='float64', compression='gzip')
+        #         try:
+        #             with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
+        #                 h.create_dataset('y', data=y, dtype='float64')
+        #                 h.create_dataset('amplitude', data=amplitude, dtype='float64')
+        #                 h.create_dataset('phase', data=phase, dtype='float64')
+        #         except OSError as e:
+        #             # Fallback to serial writing from rank 0 if MPI file creation fails
+        #             if rank == 0:
+        #                 print(f"MPI file creation failed: {e}")
+        #                 print("Falling back to serial file writing...")
+        #                 with h5py.File(filename + '.h5', 'w') as h:
+        #                     h.create_dataset('y', data=y, dtype='float64', compression='gzip')
+        #                     h.create_dataset('amplitude', data=amplitude, dtype='float64', compression='gzip')
+        #                     h.create_dataset('phase', data=phase, dtype='float64', compression='gzip')
+        #             comm.barrier()  # Ensure all processes wait for file creation
+        #     else: 
+        #         with h5py.File(filename + '.h5', 'w') as h:
+        #             h.create_dataset('y', data=y, dtype='float64', compression='gzip')
+        #             h.create_dataset('amplitude', data=amplitude, dtype='float64', compression='gzip')
+        #             h.create_dataset('phase', data=phase, dtype='float64', compression='gzip')
+        
+        # return amplitude*np.exp(1j*phase)
+
+        # if saveh5:
+        #     if parallel:
+        #         from mpi4py import MPI
+        #         comm = MPI.COMM_WORLD
+        #         rank = comm.Get_rank()
+                
+        #         if rank == 0:
+        #             np.savez_compressed(filename + '.npz',
+        #                             y=y,
+        #                             amplitude=amplitude,
+        #                             phase=phase)
+        #             print(f"Complex field data saved to {filename}.npz")
+        #         comm.barrier()
+        #     else:
+        #         np.savez_compressed(filename + '.npz',
+        #                         y=y,
+        #                         amplitude=amplitude,
+        #                         phase=phase)
+        #         print(f"Complex field data saved to {filename}.npz")
+
+        if saveh5:
+            np.savez_compressed(filename + '.npz',
+                                y=y,
+                                amplitude=amplitude,
+                                phase=phase)
+            print(f"Complex field data saved to {filename}.npz")
         
         return amplitude*np.exp(1j*phase)
 
@@ -297,47 +416,76 @@ def custom_beam_FT(sim_res,
         FFTs[k] = np.abs(fft) 
         FFTs[k] = FFTs[k]/np.max(FFTs[k])
 
-    if savebeam:
-        # Helper function to create dataset with appropriate parameters
-        def create_flexible_dataset(h, name, data, dtype):
-            # Check if data is scalar (has no length) or is a 0-dimensional array
-            is_scalar = np.isscalar(data) or (isinstance(data, np.ndarray) and data.ndim == 0)
+    # if savebeam:
+    #     # Helper function to create dataset with appropriate parameters
+    #     def create_flexible_dataset(h, name, data, dtype):
+    #         # Check if data is scalar (has no length) or is a 0-dimensional array
+    #         is_scalar = np.isscalar(data) or (isinstance(data, np.ndarray) and data.ndim == 0)
             
-            if parallel:
-                # No compression in parallel mode
-                h.create_dataset(name, data=data, dtype=dtype)
-            else:
-                # Only apply compression if not scalar
-                if is_scalar:
-                    h.create_dataset(name, data=data, dtype=dtype)
-                else:
-                    h.create_dataset(name, data=data, dtype=dtype, compression='gzip')
+    #         if parallel:
+    #             # No compression in parallel mode
+    #             h.create_dataset(name, data=data, dtype=dtype)
+    #         else:
+    #             # Only apply compression if not scalar
+    #             if is_scalar:
+    #                 h.create_dataset(name, data=data, dtype=dtype)
+    #             else:
+    #                 h.create_dataset(name, data=data, dtype=dtype, compression='gzip')
                 
-        if parallel:
-            from mpi4py import MPI
-            comm = MPI.COMM_WORLD
-            if not h5py.get_config().mpi:
-                raise ValueError("h5py was built without MPI support, can't use mpio driver")
+    #     if parallel:
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         if not h5py.get_config().mpi:
+    #             raise ValueError("h5py was built without MPI support, can't use mpio driver")
             
-            with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
-                create_flexible_dataset(h, 'freq', freq, 'float64')
-                create_flexible_dataset(h, 'beams', FFTs, 'float64')
-                aper = aper_size
-                create_flexible_dataset(h, 'aper_size', aper, 'float64')
-        else:
-            # Only have rank 0 create the file in non-parallel mode
-            from mpi4py import MPI
-            comm = MPI.COMM_WORLD
-            rank = comm.Get_rank()
+    #         with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
+    #             create_flexible_dataset(h, 'freq', freq, 'float64')
+    #             create_flexible_dataset(h, 'beams', FFTs, 'float64')
+    #             aper = aper_size
+    #             create_flexible_dataset(h, 'aper_size', aper, 'float64')
+    #     else:
+    #         # Only have rank 0 create the file in non-parallel mode
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         rank = comm.Get_rank()
             
-            if rank == 0:
-                with h5py.File(filename + '.h5', 'w', libver='latest') as h:
-                    create_flexible_dataset(h, 'freq', freq, 'float64')
-                    create_flexible_dataset(h, 'beams', FFTs, 'float64')
-                    aper = aper_size
-                    create_flexible_dataset(h, 'aper_size', aper, 'float64')
-            comm.barrier()  # Ensure all processes wait for file creation
-        return freq, FFTs
+    #         if rank == 0:
+    #             with h5py.File(filename + '.h5', 'w', libver='latest') as h:
+    #                 create_flexible_dataset(h, 'freq', freq, 'float64')
+    #                 create_flexible_dataset(h, 'beams', FFTs, 'float64')
+    #                 aper = aper_size
+    #                 create_flexible_dataset(h, 'aper_size', aper, 'float64')
+    #         comm.barrier()  # Ensure all processes wait for file creation
+    #     return freq, FFTs
+
+    # if savebeam:
+    #     if parallel:
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         rank = comm.Get_rank()
+            
+    #         if rank == 0:
+    #             np.savez_compressed(filename + '.npz',
+    #                               freq=freq,
+    #                               beams=FFTs,
+    #                               aper_size=aper_size)
+    #             print(f"Beam FFT data saved to {filename}.npz")
+    #         comm.barrier()
+    #     else:
+    #         np.savez_compressed(filename + '.npz',
+    #                           freq=freq,
+    #                           beams=FFTs,
+    #                           aper_size=aper_size)
+    #         print(f"Beam FFT data saved to {filename}.npz")
+
+    if savebeam:
+        np.savez_compressed(filename + '.npz',
+                            freq=freq,
+                            beams=FFTs,
+                            aper_size=aper_size)
+        print(f"Beam FFT data saved to {filename}.npz")
+        
+    return freq, FFTs
 
 
 
@@ -361,36 +509,79 @@ def save_epsilon_map(sim, filename, plot=True, parallel=False):
     print("Saving epsilon map...")
     eps_data = sim.get_epsilon()
     
-    # Save to HDF5 file
-    if parallel:
-        from mpi4py import MPI
-        comm = MPI.COMM_WORLD
-        if not h5py.get_config().mpi:
-            raise ValueError("h5py was built without MPI support, can't use mpio driver")
+    # # Save to HDF5 file
+    # if parallel:
+    #     from mpi4py import MPI
+    #     comm = MPI.COMM_WORLD
+    #     if not h5py.get_config().mpi:
+    #         raise ValueError("h5py was built without MPI support, can't use mpio driver")
         
-        with h5py.File(f"{filename}_epsilon.h5", 'w', driver='mpio', comm=comm) as f:
-            f.create_dataset('epsilon', data=eps_data)
-    else:
-        # Only have rank 0 create the file
-        from mpi4py import MPI
-        comm = MPI.COMM_WORLD
-        rank = comm.Get_rank()
+    #     with h5py.File(f"{filename}_epsilon.h5", 'w', driver='mpio', comm=comm) as f:
+    #         f.create_dataset('epsilon', data=eps_data)
+    # else:
+    #     # Only have rank 0 create the file
+    #     from mpi4py import MPI
+    #     comm = MPI.COMM_WORLD
+    #     rank = comm.Get_rank()
         
-        if rank == 0:
-            with h5py.File(f"{filename}_epsilon.h5", 'w', libver='latest') as f:
-                f.create_dataset('epsilon', data=eps_data, compression='gzip')
-            print(f"Epsilon data saved to {filename}_epsilon.h5")
+    #     if rank == 0:
+    #         with h5py.File(f"{filename}_epsilon.h5", 'w', libver='latest') as f:
+    #             f.create_dataset('epsilon', data=eps_data, compression='gzip')
+    #         print(f"Epsilon data saved to {filename}_epsilon.h5")
             
-            # Optionally plot and save the epsilon map
-            if plot:
-                plt.figure(figsize=(10, 8), dpi=150)
-                plt.imshow(eps_data.transpose(), interpolation='spline36', cmap='viridis')
-                plt.colorbar(label='ε (epsilon)')
-                plt.title('Simulation Epsilon Map')
-                plt.savefig(f"{filename}_epsilon.png")
-                plt.close()
-                print(f"Epsilon plot saved to {filename}_epsilon.png")
-        comm.barrier()  # Ensure all processes wait for file creation
+    #         # Optionally plot and save the epsilon map
+    #         if plot:
+    #             plt.figure(figsize=(10, 8), dpi=150)
+    #             plt.imshow(eps_data.transpose(), interpolation='spline36', cmap='viridis')
+    #             plt.colorbar(label='ε (epsilon)')
+    #             plt.title('Simulation Epsilon Map')
+    #             plt.savefig(f"{filename}_epsilon.png")
+    #             plt.close()
+    #             print(f"Epsilon plot saved to {filename}_epsilon.png")
+    #     comm.barrier()  # Ensure all processes wait for file creation
+    
+    # return eps_data
+
+    # # Save to NPZ file instead of HDF5
+    # if parallel:
+    #     from mpi4py import MPI
+    #     comm = MPI.COMM_WORLD
+    #     rank = comm.Get_rank()
+        
+    #     if rank == 0:
+    #         np.savez_compressed(f"{filename}_epsilon.npz", epsilon=eps_data)
+    #         print(f"Epsilon data saved to {filename}_epsilon.npz")
+            
+    #         if plot:
+    #             plt.figure(figsize=(10, 8), dpi=150)
+    #             plt.imshow(eps_data.transpose(), interpolation='spline36', cmap='viridis')
+    #             plt.colorbar(label='ε (epsilon)')
+    #             plt.title('Simulation Epsilon Map')
+    #             plt.savefig(f"{filename}_epsilon.png")
+    #             plt.close()
+    #             print(f"Epsilon plot saved to {filename}_epsilon.png")
+    #     comm.barrier()
+    # else:
+    #     from mpi4py import MPI
+    #     comm = MPI.COMM_WORLD
+    #     rank = comm.Get_rank()
+        
+    #     if rank == 0:
+    #         np.savez_compressed(f"{filename}_epsilon.npz", epsilon=eps_data)
+    #         print(f"Epsilon data saved to {filename}_epsilon.npz")
+            
+    #         if plot:
+    #             plt.figure(figsize=(10, 8), dpi=150)
+    #             plt.imshow(eps_data.transpose(), interpolation='spline36', cmap='viridis')
+    #             plt.colorbar(label='ε (epsilon)')
+    #             plt.title('Simulation Epsilon Map')
+    #             plt.savefig(f"{filename}_epsilon.png")
+    #             plt.close()
+    #             print(f"Epsilon plot saved to {filename}_epsilon.png")
+    #     comm.barrier()
+
+    np.savez_compressed(f"{filename}_epsilon.npz", epsilon=eps_data)
+    print(f"Epsilon data saved to {filename}_epsilon.npz")
     
     return eps_data
 
@@ -918,7 +1109,10 @@ def summary_plots(
     zero_pad_beam = 15,
     gaussian_fit_main_beam = False,
     gaussian_fit_power_threshold = -30,
-    average_source_power= None
+    average_source_power= None,
+    savefig = False,
+    show_plots = True,
+    savename_suffix = ''
 ):
     """
     Loads multiple E-field files, calculates average field, and plots comparison with last timestep.
@@ -952,6 +1146,24 @@ def summary_plots(
     import matplotlib.pyplot as plt
     import glob
     
+    if savefig:
+        # Create an directory named as summary_plots_results (if doesn't exist)
+        if not os.path.exists('summary_plots_results'):
+            os.makedirs('summary_plots_results')
+            
+        if frequency_label:
+            freq_label_clean = frequency_label.replace(" ", "_").replace("/", "-")
+            plot_path = f'summary_plots_results/{freq_label_clean}'
+        else:
+            plot_path = 'summary_plots_results'
+        print(f"Plots will be saved to: {plot_path}")
+
+        if savename_suffix != '':
+            plot_path = os.path.join(plot_path, savename_suffix)
+
+        if not os.path.exists(plot_path):
+            os.makedirs(plot_path)
+
     # Get all E-field files matching the pattern
     efield_files = sorted(glob.glob(efield_files_pattern))
     print(f"Found {len(efield_files)} E-field files")
@@ -1293,7 +1505,11 @@ def summary_plots(
     plt.title(f'E-field Magnitude Slice Comparison at x = {x_coords[x_index]:.1f} mm ({frequency_label})')
     plt.legend()
     plt.grid()
-    plt.show()
+
+    if savefig:
+        plt.savefig(f'{plot_path}/efield_magnitude_slice_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+    if show_plots:
+        plt.show()
 
     #! Plot 1(b): Far Field comparision from the aperture_slice_avg using plotting function
     plt.figure(figsize=(10, 6))
@@ -1321,7 +1537,12 @@ def summary_plots(
     plt.xlim(0, 20)
     plt.legend()
     plt.grid()
-    plt.show()
+
+    if savefig:
+        plt.savefig(f'{plot_path}/far_field_comparison_aperture_slice_avg_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+    if show_plots:
+        plt.show()
+    
 
     #! Plot 1(c): Far Field comparision between FFT(GRASP APERTURE PROFILE)
     plt.figure(figsize=(10, 6))
@@ -1337,7 +1558,11 @@ def summary_plots(
     plt.xlim(0, 20)
     plt.legend()
     plt.grid()
-    plt.show()
+
+    if savefig:
+        plt.savefig(f'{plot_path}/far_field_comparison_grasp_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+    if show_plots:
+        plt.show()
 
     #! Plot 1(d): Far Field comparision between FFT(CST APERTURE PROFILE)
     plt.figure(figsize=(10, 6))
@@ -1353,7 +1578,11 @@ def summary_plots(
     plt.xlim(0, 20)
     plt.legend()
     plt.grid()
-    plt.show()
+
+    if savefig:
+        plt.savefig(f'{plot_path}/far_field_comparison_cst_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+    if show_plots:
+        plt.show()
 
     #! Plot 1(e): Far Field comparision between GRASP datasets of comparision_GRASP_fft_data if provided
     if comparision_GRASP_fft_data is not None:
@@ -1369,7 +1598,12 @@ def summary_plots(
         plt.xlim(0, 20)
         plt.legend()
         plt.grid()
-        plt.show()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/far_field_comparison_grasp_ffb_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+
     #! Plot 1(f): Far Field comparision between CST datasets of comparision_CST_fft_data if provided
         if comparision_CST_fft_data is not None:
             plt.figure(figsize=(10, 6))
@@ -1384,7 +1618,11 @@ def summary_plots(
             plt.xlim(0, 20)
             plt.legend()
             plt.grid()
-            plt.show()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/far_field_comparison_cst_ffb_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()
 
     #! Plot 1(g): Far Field comparision between FFB(calculated in GRASP) and FFB(calculated in CST) datasets if ONE OF them is provided
     if (comparision_GRASP_fft_data is not None) or (comparision_CST_fft_data is not None):
@@ -1405,7 +1643,11 @@ def summary_plots(
         plt.xlim(0, 20)
         plt.legend()
         plt.grid()
-        plt.show()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/far_field_comparison_grasp_cst_ffb_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
 
     #! Plot 1(h): Far Field comparision between FFB(calculated in GRASP), FFB(calculated in CST) and Plot 1(b) FFB calculated for all datasets
     if (comparision_GRASP_data is not None) or (comparision_CST_data is not None):
@@ -1438,7 +1680,11 @@ def summary_plots(
         plt.xlim(0, 20)
         plt.legend()
         plt.grid()
-        plt.show()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/far_field_comparison_grasp_cst_ffb_and_all_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
 
     #! Plot 1(i): Gaussian Fit to the main beam of FFB from MEEPSAT, GRASP and CST if provided
     if gaussian_fit_main_beam:
@@ -1519,7 +1765,11 @@ def summary_plots(
         plt.xlim(0, 20)
         plt.legend()
         plt.grid()
-        plt.show()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/far_field_gaussian_fit_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
 
     #! Plot 2: Phase slice comparison
         phase_slice_avg = ez_phase_avg_degrees[:, x_index]
@@ -1550,7 +1800,11 @@ def summary_plots(
         plt.title(f'E-field Phase Slice Comparison at x = {x_coords[x_index]:.1f} mm ({frequency_label})')
         plt.legend()
         plt.grid()
-        plt.show()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/efield_phase_slice_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
         
         #! Plot 3: 2D magnitude comparison (side by side)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -1582,7 +1836,11 @@ def summary_plots(
         plt.colorbar(im2, ax=ax2, label='Power (dB)')
         
         plt.tight_layout()
-        plt.show()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/efield_magnitude_2D_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
         
         #! Plot 4: 2D phase comparison (side by side)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -1614,7 +1872,11 @@ def summary_plots(
         plt.colorbar(im2, ax=ax2, label='Phase (degrees)')
         
         plt.tight_layout()
-        plt.show()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/efield_phase_2D_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
 
         #! Plot 5: 2D Poynting vector comparison (side by side)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -1644,6 +1906,12 @@ def summary_plots(
         ax2.set_title(f'Last Timestep Poynting Vector Magnitude ({frequency_label})')
         ax2.grid()
         plt.colorbar(im2, ax=ax2, label='Power (dB)')   
+        plt.tight_layout()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/poynting_vector_magnitude_2D_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
 
         #! Plot 6: Poynting vector slice comparison at x_position
         poynting_slice_avg = averaged_poynting_vector[:, x_index]/np.max(averaged_poynting_vector[:, x_index])
@@ -1662,7 +1930,11 @@ def summary_plots(
         plt.title(f'Poynting Vector Magnitude Slice Comparison at x = {x_coords[x_index]:.1f} mm ({frequency_label})')
         plt.legend()
         plt.grid()
-        plt.show()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/poynting_vector_magnitude_slice_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
 
         #! Plot 7: POYNTING ANALYSIS: 
         # Extract the S field distrubution for the full box with only source
@@ -1694,7 +1966,11 @@ def summary_plots(
             plt.title(f'Time Avg $S$/Sun(source power) ({frequency_label})')
             plt.colorbar(cs, label='Power (dB)')
             plt.grid()
-            plt.show()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/poynting_vector_divided_by_source_power_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()
 
             #! Plot 7(b): Poynting vector divided by integrated source power
             # Using trapz to integrate the source power over the y axis (ycoords)
@@ -1723,7 +1999,11 @@ def summary_plots(
             plt.title(f'Time Avg $S$/Integrated Source Power ({frequency_label})')
             plt.colorbar(cs, label='Power (dB)')
             plt.grid()
-            plt.show()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/poynting_vector_divided_by_integrated_source_power_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()
 
         #! Plot 7(c): Doing the same thing, but for the average power calculated from avg efield
         if average_source_power is not None:
@@ -1751,7 +2031,11 @@ def summary_plots(
             plt.title(f'Time Avg |E|^2/Sun(source power) ({frequency_label})')
             plt.colorbar(cs, label='Power (dB)')
             plt.grid()
-            plt.show()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/efield_power_divided_by_source_power_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()
 
             # ! Plot 7(d): Poynting vector divided by integrated source power
             # Using trapz to integrate the source power over the y axis (ycoords)
@@ -1773,7 +2057,12 @@ def summary_plots(
             plt.title(f'Time Avg |E|^2/Integrated Source Power ({frequency_label})')
             plt.colorbar(cs, label='Power (dB)')
             plt.grid()
-            plt.show()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/efield_power_divided_by_integrated_source_power_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()    
+        
 
         # #! Plot 7: Poynting vectot divided by source (2D) comparison (side by side) in linear scale
         # if norm_factor is not None:
@@ -1852,6 +2141,1064 @@ def summary_plots(
 
         }
     
+
+
+
+def summary_plots_forebaffles(
+    simulation_resolution,
+    simulation_wvl,
+    efield_files_pattern,
+    poynting_vector_pattern,
+    xyzw_coords_file,
+    x_position,
+    analysis,
+    frequency_label="90 GHz",
+    norm_factor=1,
+    contour_levels = 10,
+    contour_db_range = (-60, 0),
+    contour_linear_range = (0, 1),
+    comparision_CST_data=None,
+    comparision_GRASP_data= None,
+    comparision_CST_fft_data = None,
+    comparision_GRASP_fft_data = None,
+    aper_size = None,
+    avg_aper_lim = None,
+    zero_pad_beam = 15,
+    gaussian_fit_main_beam = False,
+    gaussian_fit_power_threshold = -30,
+    average_source_power= None,
+    savefig = False,
+    show_plots = True,
+    savename_suffix = ''
+):
+    """
+    Loads multiple E-field files, calculates average field, and plots comparison with last timestep.
+    Also compares with CST and GRASP data if provided.
+
+    Far field profiles are also compared if GRASP and CST data is provided.
+    
+    Parameters:
+    -----------
+        simulation_resolution (float): Simulation resolution in pixels/mm
+        simulation_wvl (float): Simulation wavelength in meep units (It should be in mm since our scaling is 1 meep unit = 1 mm)   
+        efield_files_pattern (str): Pattern for E-field files (e.g., 'path/single_lens_testing-e-*.h5')
+        xyzw_coords_file (str): Path to the .npz file with x, y, w coordinates
+        x_position (float): X position (in mm) for the slice
+        analysis (module): Analysis module with readHDF5 function
+        frequency_label (str): Frequency label for plot titles
+        norm_factor (float): Normalization factor for power calculations
+        contour_levels (int): Number of contour levels for contour plots
+        comparision_CST_data (dict): Dictionary containing CST data for comparison (optional)
+                                    cst_data = {'ez_magnitude', 'ez_phase', 's_magnitude'}
+        comparision_GRASP_data (dict): Dictionary or list of dictionaries containing GRASP data for comparision (optional)
+                                    grasp_data = {'Ex', 'Ey', 'Ez', 'x', 'y', 'plot_label'}   
+        comparision_CST_fft_data (dict): Dictionary containing CST FFT data for far field comparison (optional)
+                                    cst_fft_data = {'angle', 'power_dB', 'plot_label'}
+        comparision_GRASP_fft_data (dict or list of dicts): Dictionary or list of dictionaries containing GRASP FFT data for far field comparison (optional)
+                                    grasp_fft_data = {'angle', 'power_dB', 'plot_label'}
+        aper_size (float): Aperture size in mm for GRASP data (optional)
+        zero_pad_beam (int): Zero padding factor for FFT beam calculation
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import glob
+    
+    if savefig:
+        # Create an directory named as summary_plots_results (if doesn't exist)
+        if not os.path.exists('summary_plots_results'):
+            os.makedirs('summary_plots_results')
+            
+        if frequency_label:
+            freq_label_clean = frequency_label.replace(" ", "_").replace("/", "-")
+            plot_path = f'summary_plots_results/{freq_label_clean}'
+        else:
+            plot_path = 'summary_plots_results'
+        print(f"Plots will be saved to: {plot_path}")
+
+        if savename_suffix != '':
+            plot_path = os.path.join(plot_path, savename_suffix)
+
+        if not os.path.exists(plot_path):
+            os.makedirs(plot_path)
+
+    # Get all E-field files matching the pattern
+    efield_files = sorted(glob.glob(efield_files_pattern))
+    print(f"Found {len(efield_files)} E-field files")
+    
+    if len(efield_files) == 0:
+        raise ValueError(f"No files found matching pattern: {efield_files_pattern}")
+
+    #Get all Poynting vector files matching the pattern
+    poynting_vector_files = sorted(glob.glob(poynting_vector_pattern))
+    print(f"Found {len(poynting_vector_files)} Poynting vector files")
+
+    if len(poynting_vector_files) == 0:
+        raise ValueError(f"No files found matching pattern: {poynting_vector_pattern}")
+    
+    #* Load coordinates
+    xyzw_data = np.load(xyzw_coords_file)
+    x_coords = xyzw_data['x_coords']
+    y_coords = xyzw_data['y_coords']
+    
+    # Initialize arrays for averaging
+    ez_magnitude_sum = None
+    ez_phase_sum_cos = None
+    ez_phase_sum_sin = None
+
+    # Load and process all efield files
+    for i, file_path in enumerate(efield_files):
+        print(f"Processing file {i+1}/{len(efield_files)}: {file_path}")
+        
+        # Load E-field data
+        e_field_data = analysis.readHDF5(file_path)
+        ez_real = e_field_data['ez.r']
+        ez_imag = e_field_data['ez.i']
+
+        
+        # Calculate magnitude and phase
+        ez_magnitude = np.sqrt(ez_real**2 + ez_imag**2)
+        ez_magnitude = np.transpose(ez_magnitude)
+        
+        ez_phase_radians = np.arctan2(ez_imag, ez_real)
+        
+        # Sum for averaging
+        if ez_magnitude_sum is None:
+            ez_magnitude_sum = ez_magnitude
+            ez_phase_sum_cos = np.cos(ez_phase_radians).T
+            ez_phase_sum_sin = np.sin(ez_phase_radians).T
+        else:
+            ez_magnitude_sum += ez_magnitude
+            ez_phase_sum_cos += np.cos(ez_phase_radians).T
+            ez_phase_sum_sin += np.sin(ez_phase_radians).T
+    
+    # Initialize arrays for Poynting vector averaging and last timestep
+    poynting_vector_sum = None
+
+    for i, file_path in enumerate(poynting_vector_files):
+        print(f"Processing Poynting vector file {i+1}/{len(poynting_vector_files)}: {file_path}")
+        
+        # Load Poynting vector data
+        poynting_data = analysis.readHDF5(file_path)
+        sx = poynting_data['sx']
+        sy = poynting_data['sy']
+        sz = poynting_data['sz']
+        total_poynting = np.abs(sx)**2 + np.abs(sy)**2 + np.abs(sz)**2
+        total_poynting = np.sqrt(total_poynting)
+        total_poynting = np.transpose(total_poynting)
+        # Sum for averaging
+        if poynting_vector_sum is None:
+            poynting_vector_sum = total_poynting
+        else:
+            poynting_vector_sum += total_poynting
+
+    # Average Poynting vector
+    averaged_poynting_vector = poynting_vector_sum / len(poynting_vector_files)
+    # Normalize averaged Poynting vector to its maximum
+    averaged_poynting_vector /= np.max(averaged_poynting_vector)
+
+    # Load last timestep for Poynting vector
+    last_poynting_file = poynting_vector_files[-1]
+    poynting_last = analysis.readHDF5(last_poynting_file)
+    sx_last = poynting_last['sx']
+    sy_last = poynting_last['sy']
+    sz_last = poynting_last['sz']
+    total_poynting_last = np.abs(sx_last)**2 + np.abs(sy_last)**2 + np.abs(sz_last)**2
+    total_poynting_last = np.sqrt(total_poynting_last)
+    total_poynting_last = np.transpose(total_poynting_last)
+    # Normalize last timestep Poynting vector to its maximum
+    total_poynting_last /= np.max(total_poynting_last)
+
+    # Average and Last timestep Poynting vector divided by norm factor
+    if norm_factor is not None:
+        averaged_poynting_vector_divided_source = averaged_poynting_vector / norm_factor
+        print(f"Averaged Poynting vector divided by norm factor shape: {averaged_poynting_vector_divided_source.shape}")
+        total_poynting_last_divided_source = total_poynting_last / norm_factor
+        print(f"Last timestep Poynting vector divided by norm factor shape: {total_poynting_last_divided_source.shape}")
+    
+    # Calculate averages
+    ez_magnitude_avg = ez_magnitude_sum / len(efield_files)
+    #!!!!!
+    ez_magnitude_avg = ez_magnitude_avg / np.max(ez_magnitude_avg)  # Normalize to max
+    ez_phase_avg_radians = np.arctan2(ez_phase_sum_sin / len(efield_files), 
+                                      ez_phase_sum_cos / len(efield_files))
+    ez_phase_avg_degrees = np.degrees(ez_phase_avg_radians)
+
+    # Load last timestep for comparison
+    last_file = efield_files[-1]
+    e_field_last = analysis.readHDF5(last_file)
+    ez_real_last = e_field_last['ez.r']
+    ez_imag_last = e_field_last['ez.i']
+    
+    ez_magnitude_last = np.sqrt(ez_real_last**2)# + ez_imag_last**2)
+    ez_magnitude_last = np.transpose(ez_magnitude_last)
+    
+    ez_phase_last_radians = np.arctan2(ez_imag_last, ez_real_last)
+    ez_phase_last_degrees = np.degrees(ez_phase_last_radians)
+    ez_phase_last_degrees = np.transpose(ez_phase_last_degrees)
+
+    # Find slice index
+    x_index = (np.abs(x_coords - x_position)).argmin()
+
+    #!= Checking if CST data is provided for comparison
+    if comparision_CST_data is not None:
+        # Creating empty lists to hold CST data
+        cst_efield = []; cst_s_mag = []
+        for i in range(len(comparision_CST_data)):
+            cst_efield_i = comparision_CST_data[i]['efield']
+            cst_s_mag_i = comparision_CST_data[i]['s_mag']
+
+            # Calculate CST E-field magnitude and phase
+            cst_efield_i['ycoords'] = cst_efield_i['Y']
+            cst_efield_i['Magnitude'] = np.sqrt(cst_efield_i['Re(Ey)']**2 + cst_efield_i['Im(Ey)']**2)
+            cst_efield_i['Phase_degrees'] = -np.degrees(np.arctan2(cst_efield_i['Im(Ey)'], cst_efield_i['Re(Ey)']))
+            # cst_efield_i['Magnitude_dB'] = 20 * np.log10(cst_efield_i['Magnitude']) #/ np.max(cst_efield_i['Magnitude']))
+
+            # Calculate CST S magnitude in dB
+            cst_s_mag_i['S_Mag_dB'] = 10 * np.log10(cst_s_mag_i['S_Mag_linear'] / np.max(cst_s_mag_i['S_Mag_linear']))
+
+            # # Plot CST Magnitude for verification
+            # plt.figure()
+            # plt.plot(cst_efield_i['ycoords'], cst_efield_i['Magnitude'], label = 'Raw CST E-field Magnitude')
+            # plt.xlabel('y (mm)')
+            # plt.ylabel('E-field Magnitude')
+            # plt.title(f'CST E-field Magnitude Slice at x={x_position} mm ({frequency_label})')
+            # plt.legend()
+            # plt.grid()
+            # plt.show()
+            
+            #* Mask out only for the aperture size 
+            cst_aperture_indices = mask_aperture(cst_efield_i['ycoords'], aper_size)
+
+            #* Then mask out and calculate the average between -avg_aper_lim to +avg_aper_lim
+            cst_norm_avg_aper_lim_indices = mask_aperture(cst_efield_i['ycoords'], avg_aper_lim)
+            
+            # Apply mask to CST E-field data
+            cst_efield_i['ycoords'] = cst_efield_i['ycoords'][cst_aperture_indices]
+            cst_efield_i['Magnitude'] = cst_efield_i['Magnitude'][cst_aperture_indices]/np.mean(cst_efield_i['Magnitude'][cst_norm_avg_aper_lim_indices])
+            cst_efield_i['Phase_degrees'] = cst_efield_i['Phase_degrees'][cst_aperture_indices]
+            cst_efield_i['Magnitude_dB'] = 20 * np.log10(cst_efield_i['Magnitude'] + 1e-12)  # Avoid log(0)
+
+            # Apply mask to CST S magnitude data
+            cst_s_mag_i['S_Mag_dB'] = cst_s_mag_i['S_Mag_dB'][cst_aperture_indices]
+
+            # # Plot after masking
+            # plt.figure()
+            # plt.plot(cst_efield_i['ycoords'], cst_efield_i['Magnitude'], label = 'Masked CST E-field Magnitude')
+            # plt.xlabel('y (mm)')
+            # plt.ylabel('E-field Magnitude')
+            # plt.title(f'CST E-field Magnitude Slice at x={x_position} mm ({frequency_label}) - Masked')
+            # plt.legend()
+            # plt.grid()  
+            # plt.show()
+
+            cst_efield.append(cst_efield_i)
+            cst_s_mag.append(cst_s_mag_i)
+    
+    #!= Checking if GRASP data is provided for comparison
+    if comparision_GRASP_data is not None:
+        # Creating empty lists to hold GRASP data
+        ez_grasp = []; ex_grasp = []; ey_grasp = []; e_grasp = []; phase_grasp = []; 
+        grasp_efield_magnitude = []; grasp_efield_magnitude_dB = []; grasp_phase_slice = []; y_grasp = []
+
+        for comparision_GRASP_data_i in comparision_GRASP_data:
+            ez_grasp_arr = comparision_GRASP_data_i['Ez']
+            ex_grasp_arr = comparision_GRASP_data_i['Ex']
+            ey_grasp_arr = comparision_GRASP_data_i['Ey']
+            e_grasp_arr = np.abs(ex_grasp_arr) #np.sqrt(np.abs(ex_grasp_arr**2 + ey_grasp_arr**2 + ez_grasp_arr**2))
+            y_grasp_arr = comparision_GRASP_data_i['x']
+
+            phase_grasp_arr = np.angle(ex_grasp_arr)
+
+            # Extract middle row and convert to dB
+            mid_row_index = e_grasp_arr.shape[0] // 2
+            grasp_efield_magnitude_arr = e_grasp_arr[mid_row_index, :]
+            # grasp_efield_magnitude_dB_arr = 20 * np.log10(grasp_efield_magnitude_arr/np.max(grasp_efield_magnitude_arr) + 1e-12)  # Avoid log(0)
+            grasp_phase_slice_arr = np.degrees(phase_grasp_arr[mid_row_index, :])
+
+            # plt.plot(y_grasp_arr, grasp_efield_magnitude_arr, label=comparision_GRASP_data_i['plot_label'])
+            # plt.xlabel('y (mm)')
+            # plt.ylabel('E-field Magnitude (dB)')
+            # plt.title(f'GRASP E-field Magnitude Slice at x={x_position} mm ({frequency_label})')
+            # plt.legend()
+            # plt.grid()
+            # plt.show()
+
+            #* Mask out only for the aperture size 
+            grasp_aperture_indices = mask_aperture(y_grasp_arr, aper_size)
+
+            #* Mask out and calculate the average between -avg_aper_lim to +avg_aper_lim
+            grasp_norm_avg_aper_lim_indices = mask_aperture(y_grasp_arr, avg_aper_lim)
+
+            # Normalize GRASP E-field magnitude to the average within avg_aper_lim
+            grasp_efield_magnitude_arr = grasp_efield_magnitude_arr/np.mean(grasp_efield_magnitude_arr[grasp_norm_avg_aper_lim_indices])
+            grasp_efield_magnitude_dB_arr = 20 * np.log10(grasp_efield_magnitude_arr + 1e-12)  # Avoid log(0)
+            
+            # Apply mask to all GRASP data arrays
+            ez_grasp_arr = ez_grasp_arr[:, grasp_aperture_indices]
+            ex_grasp_arr = ex_grasp_arr[:, grasp_aperture_indices]
+            ey_grasp_arr = ey_grasp_arr[:, grasp_aperture_indices]
+            e_grasp_arr = e_grasp_arr[:, grasp_aperture_indices]
+            phase_grasp_arr = phase_grasp_arr[:, grasp_aperture_indices]
+            grasp_efield_magnitude_arr = grasp_efield_magnitude_arr[grasp_aperture_indices]
+            grasp_efield_magnitude_dB_arr = grasp_efield_magnitude_dB_arr[grasp_aperture_indices]
+            grasp_phase_slice_arr = grasp_phase_slice_arr[grasp_aperture_indices]
+            y_grasp_arr = y_grasp_arr[grasp_aperture_indices]
+
+            # # Plot again after masking
+            # plt.plot(y_grasp_arr, grasp_efield_magnitude_arr, label=comparision_GRASP_data_i['plot_label'] + ' (Masked)')
+            # plt.xlabel('y (mm)')
+            # plt.ylabel('E-field Magnitude (dB)')
+            # plt.title(f'GRASP E-field Magnitude Slice at x={x_position} mm  ({frequency_label}) - Masked')
+            # plt.legend()
+            # plt.grid()  
+            # plt.show()
+
+            # Append everything to lists for potential multiple GRASP datasets
+            ez_grasp.append(ez_grasp_arr); ex_grasp.append(ex_grasp_arr); ey_grasp.append(ey_grasp_arr); e_grasp.append(e_grasp_arr); phase_grasp.append(phase_grasp_arr)
+            grasp_efield_magnitude.append(grasp_efield_magnitude_arr); grasp_efield_magnitude_dB.append(grasp_efield_magnitude_dB_arr); 
+            grasp_phase_slice.append(grasp_phase_slice_arr); y_grasp.append(y_grasp_arr)
+    
+
+    #!= MEEPSAT aperture masking
+    #! Extract slices for plotting and also calculate the Far field beams from those slices 
+    aperture_slice_avg = ez_magnitude_avg[:, x_index]#/np.max(ez_magnitude_avg[:, x_index])
+    aperture_slice_last = ez_magnitude_last[:, x_index]#/np.max(ez_magnitude_last[:, x_index])
+    y_meep = y_coords
+
+    # Mask out and calculate the average between -avg_aper_lim to +avg_aper_lim
+    meep_norm_avg_aper_lim_indices = mask_aperture(y_meep, avg_aper_lim)
+    aperture_slice_avg = aperture_slice_avg/np.mean(aperture_slice_avg[meep_norm_avg_aper_lim_indices])
+    aperture_slice_last = aperture_slice_last/np.mean(aperture_slice_last[meep_norm_avg_aper_lim_indices])
+
+    # Aperture masking
+    meep_aperture_indices = mask_aperture(y_meep, aper_size)
+    aperture_slice_avg = aperture_slice_avg[meep_aperture_indices]
+    aperture_slice_last = aperture_slice_last[meep_aperture_indices]
+    y_meep = y_meep[meep_aperture_indices]
+
+    #~ CST FFB
+    if comparision_CST_data is not None:
+        angle_array_cst = []; power_dB_array_cst = []
+        cst_resolution_list = []
+        for i in range(len(comparision_CST_data)):
+            # Calculate CST Resolution
+            cst_resolution = calculate_CST_resolution(y_coords= cst_efield[i]['ycoords'])
+            print(f"Calculated CST resolution for {comparision_CST_data[i]['plot_label']}: {cst_resolution} points/mm")
+
+            # Use cst_far_field_fft function to calculate the far field from CST aperture slice
+            cst_fft_dict = cst_far_field_fft(y_coords = cst_efield[i]['ycoords'],
+                                             efield = cst_efield[i]['Magnitude'],
+                                             cst_resolution = cst_resolution,
+                                             wavelength = simulation_wvl,
+                                             aper_size = aper_size,
+                                             zero_pad_beam = zero_pad_beam,
+                                             plot_label = comparision_CST_data[i]['plot_label'] + f" ({frequency_label})")
+            
+            angle_array_cst_i, power_dB_array_cst_i = cst_fft_dict['angle'], cst_fft_dict['power_dB']
+            cst_resolution_list.append(cst_resolution)
+            # Append data for plotting
+            angle_array_cst.append(angle_array_cst_i)
+            power_dB_array_cst.append(power_dB_array_cst_i)
+    #~ GRASP FFB
+    if comparision_GRASP_data is not None:
+        # Initialize lists to hold the calculated far field data from GRASP
+        angle_array_grasp_list = []; power_dB_array_grasp_list = []
+        # Initialize the efield_data_meep_list and y_coords_meep_list, grasp_resolution_list
+        # efield_data_meep_list = []; y_coords_meep_list = []; 
+        grasp_resolution_list = [] 
+        for i in range(len(comparision_GRASP_data)):
+            # Calculate the GRASP resolution
+            print(f"y_grasp_{comparision_GRASP_data[i]['plot_label']}", y_grasp[i])
+            grasp_resolution = calculate_grasp_resolution(y_grasp[i])
+            print(f"Calculated GRASP resolution for {comparision_GRASP_data[i]['plot_label']}: {grasp_resolution} points/mm")
+
+            # Use grasp_far_field_fft function to calculate the far field from GRASP aperture slice
+            grasp_fft_dict = grasp_far_field_fft(grasp_data = comparision_GRASP_data[i],
+                                                wavelength = simulation_wvl,
+                                                aper_size = aper_size,
+                                                zero_pad_beam = zero_pad_beam,
+                                                plot_label = comparision_GRASP_data[i]['plot_label'] + f" ({frequency_label})")
+            angle_array_grasp, power_dB_array_grasp = grasp_fft_dict['angle'], grasp_fft_dict['power_dB']
+            grasp_resolution_list.append(grasp_resolution)
+
+            # Append data for plotting
+            angle_array_grasp_list.append(angle_array_grasp)
+            power_dB_array_grasp_list.append(power_dB_array_grasp)
+
+    #~ MEEPSAT FFB
+    #! First calculate the far field from the aperture slice avg using meepsat_far_field_fft function
+    meepsat_fft_dict = meepsat_far_field_fft(y_coords = y_meep,
+                                             efield = aperture_slice_avg,
+                                             meep_resolution = simulation_resolution,
+                                             wavelength = simulation_wvl,
+                                             aper_size = aper_size,
+                                             zero_pad_beam = zero_pad_beam,
+                                             plot_label = f"MEEPSAT ({frequency_label})")
+
+    angle_array_meepsat, power_dB_array_meepsat = meepsat_fft_dict['angle'], meepsat_fft_dict['power_dB']
+    print("Shape of MEEPSAT far field angle array:", angle_array_meepsat.shape)
+    print("Shape of MEEPSAT far field power dB array:", power_dB_array_meepsat.shape)
+
+    #! Plot 1: Magnitude slice comparison
+    plt.figure(figsize=(10, 6))
+
+    # Plot for MEEPSAT
+    plt.plot(y_meep, 10 * np.log10(aperture_slice_avg / norm_factor), 
+             'b-', label='MeepSAT Time AvG', linewidth=2)
+
+    # Plot for GRASP if provided
+    if comparision_GRASP_data is not None:
+        for i in range(len(comparision_GRASP_data)):
+            plt.plot(y_grasp[i], grasp_efield_magnitude_dB[i], label='GRASP ({})'.format(comparision_GRASP_data[i]['plot_label']), linewidth=2)
+
+    # Plot for CST if provided
+    if comparision_CST_data is not None:
+        for i in range(len(comparision_CST_data)):
+            plt.plot(cst_efield[i]['Y'], cst_efield[i]['Magnitude_dB'], 'g-.', label='CST Data', linewidth=2)
+
+    #plt.ylim(-30, 0)
+    plt.xlabel('Y (mm)')
+    plt.ylabel('Power (dB)')
+    plt.title(f'E-field Magnitude Slice Comparison at x = {x_coords[x_index]:.1f} mm ({frequency_label})')
+    plt.legend()
+    plt.grid()
+
+    if savefig:
+        plt.savefig(f'{plot_path}/efield_magnitude_slice_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+    if show_plots:
+        plt.show()
+
+    #! Plot 1(b): Far Field comparision from the aperture_slice_avg using plotting function
+    plt.figure(figsize=(10, 6))
+
+    # Plot for MEEPSAT
+    plt.plot(angle_array_meepsat, power_dB_array_meepsat, 'b-', label=meepsat_fft_dict['plot_label'], linewidth=2)
+
+    # Plot for GRASP if provided
+    if comparision_GRASP_data is not None:
+        for i in range(len(angle_array_grasp_list)):
+            print(f"Plotting far field comparison for {comparision_GRASP_data[i]['plot_label']}")
+            plt.plot(angle_array_grasp_list[i], power_dB_array_grasp_list[i], label='{}'.format(comparision_GRASP_data[i]['plot_label']), linewidth=2, linestyle='-.')
+            # plt.plot(angle_array_meepsat_list[i], power_dB_array_meepsat_list[i], 'b--', label='MeepSAT (Res: {})'.format(comparision_GRASP_data[i]['plot_label']), linewidth=2)
+
+    # Plot for CST if provided
+    if comparision_CST_data is not None:
+        for i in range(len(angle_array_cst)):
+            print(f"Plotting far field comparison for {comparision_CST_data[i]['plot_label']}")
+            plt.plot(angle_array_cst[i], power_dB_array_cst[i], label='{}'.format(comparision_CST_data[i]['plot_label']), linewidth=2, linestyle=(0, (1, 1)))
+
+    plt.xlabel('Angle (degrees)')
+    plt.ylabel('Power (dB)')
+    plt.title(f'Far Field Comparison from Aperture Slice Avg ({frequency_label})')
+    plt.ylim(-60, 0)
+    plt.xlim(0, 20)
+    plt.legend()
+    plt.grid()
+
+    if savefig:
+        plt.savefig(f'{plot_path}/far_field_comparison_aperture_slice_avg_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+    if show_plots:
+        plt.show()
+    
+
+    #! Plot 1(c): Far Field comparision between FFT(GRASP APERTURE PROFILE)
+    plt.figure(figsize=(10, 6))
+    if comparision_GRASP_data is not None:
+        for i in range(len(angle_array_grasp_list)):
+            print(f"Plotting far field comparison for {comparision_GRASP_data[i]['plot_label']}")
+            plt.plot(angle_array_grasp_list[i], power_dB_array_grasp_list[i], label='{}'.format(comparision_GRASP_data[i]['plot_label']), linewidth=2, linestyle='-.')
+    
+    plt.xlabel('Angle (degrees)')
+    plt.ylabel('Power (dB)')
+    plt.title(f'Far Field Comparison between GRASP Datasets ({frequency_label})')
+    plt.ylim(-60, 0)
+    plt.xlim(0, 20)
+    plt.legend()
+    plt.grid()
+
+    if savefig:
+        plt.savefig(f'{plot_path}/far_field_comparison_grasp_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+    if show_plots:
+        plt.show()
+
+    #! Plot 1(d): Far Field comparision between FFT(CST APERTURE PROFILE)
+    plt.figure(figsize=(10, 6))
+    if comparision_CST_data is not None:
+        for i in range(len(angle_array_cst)):
+            print(f"Plotting far field comparison for {comparision_CST_data[i]['plot_label']}")
+            plt.plot(angle_array_cst[i], power_dB_array_cst[i], label='{}'.format(comparision_CST_data[i]['plot_label']), linewidth=2, linestyle=(0, (1, 1)))
+
+    plt.xlabel('Angle (degrees)')
+    plt.ylabel('Power (dB)')
+    plt.title(f'Far Field Comparison between CST Datasets ({frequency_label})')
+    plt.ylim(-60, 0)
+    plt.xlim(0, 20)
+    plt.legend()
+    plt.grid()
+
+    if savefig:
+        plt.savefig(f'{plot_path}/far_field_comparison_cst_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+    if show_plots:
+        plt.show()
+
+    #! Plot 1(e): Far Field comparision between GRASP datasets of comparision_GRASP_fft_data if provided
+    if comparision_GRASP_fft_data is not None:
+        plt.figure(figsize=(10, 6))
+        for i in range(len(comparision_GRASP_fft_data)):
+            print(f"Plotting far field comparison for {comparision_GRASP_fft_data[i]['plot_label']}")
+            plt.plot(comparision_GRASP_fft_data[i]['angle'], comparision_GRASP_fft_data[i]['power_dB'], label='{}'.format(comparision_GRASP_fft_data[i]['plot_label']), linewidth=2, linestyle='-.')
+
+        plt.xlabel('Angle (degrees)')
+        plt.ylabel('Power (dB)')
+        plt.title(f'Far Field Comparison between FFB (calculated in GRASP) Datasets ({frequency_label})')
+        plt.ylim(-60, 0)
+        plt.xlim(0, 20)
+        plt.legend()
+        plt.grid()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/far_field_comparison_grasp_ffb_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+
+    #! Plot 1(f): Far Field comparision between CST datasets of comparision_CST_fft_data if provided
+        if comparision_CST_fft_data is not None:
+            plt.figure(figsize=(10, 6))
+            for i in range(len(comparision_CST_fft_data)):
+                print(f"Plotting far field comparison for {comparision_CST_fft_data[i]['plot_label']}")
+                plt.plot(comparision_CST_fft_data[i]['angle'], comparision_CST_fft_data[i]['power_dB'], label='{}'.format(comparision_CST_fft_data[i]['plot_label']), linewidth=2, linestyle=(0, (1, 1)))
+
+            plt.xlabel('Angle (degrees)')
+            plt.ylabel('Power (dB)')
+            plt.title(f'Far Field Comparison between FFB (calculated in CST) Datasets ({frequency_label})')
+            plt.ylim(-60, 0)
+            plt.xlim(0, 20)
+            plt.legend()
+            plt.grid()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/far_field_comparison_cst_ffb_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()
+
+    #! Plot 1(g): Far Field comparision between FFB(calculated in GRASP) and FFB(calculated in CST) datasets if ONE OF them is provided
+    if (comparision_GRASP_fft_data is not None) or (comparision_CST_fft_data is not None):
+        plt.figure(figsize=(10, 6))
+        if comparision_GRASP_fft_data is not None:
+            for i in range(len(comparision_GRASP_fft_data)):
+                print(f"Plotting far field comparison for {comparision_GRASP_fft_data[i]['plot_label']}")
+                plt.plot(comparision_GRASP_fft_data[i]['angle'], comparision_GRASP_fft_data[i]['power_dB'], label='{}'.format(comparision_GRASP_fft_data[i]['plot_label']), linewidth=2, linestyle='-.')
+        if comparision_CST_fft_data is not None:
+            for i in range(len(comparision_CST_fft_data)):
+                print(f"Plotting far field comparison for {comparision_CST_fft_data[i]['plot_label']}")
+                plt.plot(comparision_CST_fft_data[i]['angle'], comparision_CST_fft_data[i]['power_dB'], label='{}'.format(comparision_CST_fft_data[i]['plot_label']), linewidth=2, linestyle=(0, (1, 1)))
+
+        plt.xlabel('Angle (degrees)')
+        plt.ylabel('Power (dB)')
+        plt.title(f'Far Field Comparison between FFB (calculated in GRASP and CST) Datasets ({frequency_label})')
+        plt.ylim(-60, 0)
+        plt.xlim(0, 20)
+        plt.legend()
+        plt.grid()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/far_field_comparison_grasp_cst_ffb_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+
+    #! Plot 1(h): Far Field comparision between FFB(calculated in GRASP), FFB(calculated in CST) and Plot 1(b) FFB calculated for all datasets
+    if (comparision_GRASP_data is not None) or (comparision_CST_data is not None):
+        plt.figure(figsize=(10, 6))
+        # Plot for MEEPSAT
+        plt.plot(angle_array_meepsat, power_dB_array_meepsat, 'b-', label=meepsat_fft_dict['plot_label'], linewidth=2)
+        if comparision_GRASP_data is not None:
+            for i in range(len(angle_array_grasp_list)):
+                print(f"Plotting far field comparison for {comparision_GRASP_data[i]['plot_label']}")
+                plt.plot(angle_array_grasp_list[i], power_dB_array_grasp_list[i], label='{}'.format(comparision_GRASP_data[i]['plot_label']), linewidth=2, linestyle='-.', marker='x')
+        if comparision_CST_data is not None:
+            for i in range(len(angle_array_cst)):
+                print(f"Plotting far field comparison for {comparision_CST_data[i]['plot_label']}")
+                plt.plot(angle_array_cst[i], power_dB_array_cst[i], label='{}'.format(comparision_CST_data[i]['plot_label']), linewidth=1.5, linestyle=(0, (1, 1)), marker='o')
+        
+        if comparision_GRASP_fft_data is not None:
+            for i in range(len(comparision_GRASP_fft_data)):
+                print(f"Plotting far field comparison for {comparision_GRASP_fft_data[i]['plot_label']}")
+                plt.plot(comparision_GRASP_fft_data[i]['angle'], comparision_GRASP_fft_data[i]['power_dB'], label='{}'.format(comparision_GRASP_fft_data[i]['plot_label']), marker='x', linewidth=1, linestyle='-.')
+        
+        if comparision_CST_fft_data is not None:
+            for i in range(len(comparision_CST_fft_data)):
+                print(f"Plotting far field comparison for {comparision_CST_fft_data[i]['plot_label']}")
+                plt.plot(comparision_CST_fft_data[i]['angle'], comparision_CST_fft_data[i]['power_dB'], label='{}'.format(comparision_CST_fft_data[i]['plot_label']), marker='o', linewidth=1, linestyle=(0, (1, 1)))
+
+        plt.xlabel('Angle (degrees)')
+        plt.ylabel('Power (dB)')
+        plt.title(f'Far Field Comparison between FFB(GRASP and CST) and FFT(CST, GRASP, MeepSAT) Datasets ({frequency_label})')
+        plt.ylim(-60, 0)
+        plt.xlim(0, 20)
+        plt.legend()
+        plt.grid()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/far_field_comparison_grasp_cst_ffb_and_all_datasets_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+
+    #! Plot 1(i): Gaussian Fit to the main beam of FFB from MEEPSAT, GRASP and CST if provided
+    if gaussian_fit_main_beam:
+        meepsat_fitting_results = fit_gaussian_main_beam(angle=angle_array_meepsat, 
+                                                         powerdB=power_dB_array_meepsat, 
+                                                         aper_size= aper_size,
+                                                         wvl=simulation_wvl,
+                                                         threshold_dB=gaussian_fit_power_threshold)
+        
+        print("MEEPSAT Gaussian Fit Results:", meepsat_fitting_results)
+        # Plot MEEPSAT fit
+        plt.figure(figsize=(10, 6))
+        plt.plot(angle_array_meepsat, power_dB_array_meepsat, 'b-', label='MEEPSAT FFB', linewidth=2)
+        if meepsat_fitting_results is not None:
+            plt.plot(meepsat_fitting_results['fitted_curve_angles'], meepsat_fitting_results['fitted_curve_dB'], 'r--', label=f"MeepSAT;FWHM: {meepsat_fitting_results['fwhm']:.2f} deg, FWHM(Th): {meepsat_fitting_results['theoretical_fwhm']:.2f} deg, HPBW: {meepsat_fitting_results['hpbw']:.2f} deg, R²: {meepsat_fitting_results['r_squared']:.3f}", 
+                     linewidth=2, alpha=0.7)
+            
+        # Plot GRASP fit if provided
+        if comparision_GRASP_data is not None:
+            for i in range(len(angle_array_grasp_list)):
+                grasp_fitting_results = fit_gaussian_main_beam(angle=angle_array_grasp_list[i], 
+                                                               powerdB=power_dB_array_grasp_list[i], 
+                                                               aper_size= aper_size,
+                                                               wvl=simulation_wvl,
+                                                               threshold_dB=gaussian_fit_power_threshold)
+                # print(f"GRASP ({comparision_GRASP_data[i]['plot_label']}) Gaussian Fit Results:", grasp_fitting_results)
+                plt.plot(angle_array_grasp_list[i], power_dB_array_grasp_list[i], label='GRASP ({})'.format(comparision_GRASP_data[i]['plot_label']), linewidth=2, linestyle='-.', marker='x')
+                if grasp_fitting_results is not None:
+                    plt.plot(grasp_fitting_results['fitted_curve_angles'], grasp_fitting_results['fitted_curve_dB'], 'r--', label=f"GRASP ({comparision_GRASP_data[i]['plot_label']});FWHM: {grasp_fitting_results['fwhm']:.2f} deg, FWHM(Th): {grasp_fitting_results['theoretical_fwhm']:.2f} deg, HPBW: {grasp_fitting_results['hpbw']:.2f} deg, R²: {grasp_fitting_results['r_squared']:.3f}", 
+                             linewidth=2, alpha=0.7)
+                    
+        # Plot CST fit if provided
+        if comparision_CST_data is not None:
+            for i in range(len(angle_array_cst)):
+                cst_fitting_results = fit_gaussian_main_beam(angle=angle_array_cst[i], 
+                                                             powerdB=power_dB_array_cst[i], 
+                                                             aper_size= aper_size,
+                                                             wvl=simulation_wvl,
+                                                             threshold_dB=gaussian_fit_power_threshold)
+                # print(f"CST ({comparision_CST_data[i]['plot_label']}) Gaussian Fit Results:", cst_fitting_results)
+                plt.plot(angle_array_cst[i], power_dB_array_cst[i], label='CST ({})'.format(comparision_CST_data[i]['plot_label']), linewidth=1.5, linestyle=(0, (1, 1)), marker='o')
+                if cst_fitting_results is not None:
+                    plt.plot(cst_fitting_results['fitted_curve_angles'], cst_fitting_results['fitted_curve_dB'], 'r--', label=f"CST ({comparision_CST_data[i]['plot_label']});FWHM: {cst_fitting_results['fwhm']:.2f} deg, FWHM(Th): {cst_fitting_results['theoretical_fwhm']:.2f} deg, HPBW: {cst_fitting_results['hpbw']:.2f} deg, R²: {cst_fitting_results['r_squared']:.3f}", 
+                             linewidth=2, alpha=0.7)
+                    
+        # Plot if comparision_GRASP_fft_data is provided
+        if comparision_GRASP_fft_data is not None:
+            for i in range(len(comparision_GRASP_fft_data)):
+                grasp_fft_fitting_results = fit_gaussian_main_beam(angle=comparision_GRASP_fft_data[i]['angle'], 
+                                                                   powerdB=comparision_GRASP_fft_data[i]['power_dB'], 
+                                                                   aper_size= aper_size,
+                                                                   wvl=simulation_wvl,
+                                                                   threshold_dB=gaussian_fit_power_threshold)
+                # print(f"GRASP FFB ({comparision_GRASP_fft_data[i]['plot_label']}) Gaussian Fit Results:", grasp_fft_fitting_results)
+                plt.plot(comparision_GRASP_fft_data[i]['angle'], comparision_GRASP_fft_data[i]['power_dB'], label='GRASP FFB ({})'.format(comparision_GRASP_fft_data[i]['plot_label']), linewidth=1, linestyle='-.', marker='x')
+                if grasp_fft_fitting_results is not None:
+                    plt.plot(grasp_fft_fitting_results['fitted_curve_angles'], grasp_fft_fitting_results['fitted_curve_dB'], 'r--', label=f"GRASP FFB ({comparision_GRASP_fft_data[i]['plot_label']});FWHM: {grasp_fft_fitting_results['fwhm']:.2f} deg, FWHM(Th): {grasp_fft_fitting_results['theoretical_fwhm']:.2f} deg, HPBW: {grasp_fft_fitting_results['hpbw']:.2f} deg, R²: {grasp_fft_fitting_results['r_squared']:.3f}", 
+                             linewidth=2, alpha=0.7)
+                    
+        # Plot if comparision_CST_fft_data is provided
+        if comparision_CST_fft_data is not None:
+            for i in range(len(comparision_CST_fft_data)):
+                cst_fft_fitting_results = fit_gaussian_main_beam(angle=comparision_CST_fft_data[i]['angle'], 
+                                                                 powerdB=comparision_CST_fft_data[i]['power_dB'], 
+                                                                 aper_size= aper_size,
+                                                                 wvl=simulation_wvl,
+                                                                 threshold_dB=gaussian_fit_power_threshold)
+                # print(f"CST FFB ({comparision_CST_fft_data[i]['plot_label']}) Gaussian Fit Results:", cst_fft_fitting_results)
+                plt.plot(comparision_CST_fft_data[i]['angle'], comparision_CST_fft_data[i]['power_dB'], label='CST FFB ({})'.format(comparision_CST_fft_data[i]['plot_label']), linewidth=1, linestyle=(0, (1, 1)), marker='o')
+                if cst_fft_fitting_results is not None:
+                    plt.plot(cst_fft_fitting_results['fitted_curve_angles'], cst_fft_fitting_results['fitted_curve_dB'], 'r--', label=f"CST FFB ({comparision_CST_fft_data[i]['plot_label']});FWHM: {cst_fft_fitting_results['fwhm']:.2f} deg, FWHM(Th): {cst_fft_fitting_results['theoretical_fwhm']:.2f} deg, HPBW: {cst_fft_fitting_results['hpbw']:.2f} deg, R²: {cst_fft_fitting_results['r_squared']:.3f}", 
+                             linewidth=2, alpha=0.7)
+                    
+        plt.xlabel('Angle (degrees)')
+        plt.ylabel('Power (dB)')
+        plt.title(f'Far Field Gaussian Fit Comparison ({frequency_label})')
+        plt.ylim(-60, 0)
+        plt.xlim(0, 20)
+        plt.legend()
+        plt.grid()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/far_field_gaussian_fit_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+
+    #! Plot 2: Phase slice comparison
+        phase_slice_avg = ez_phase_avg_degrees[:, x_index]
+        phase_slice_last = ez_phase_last_degrees[:, x_index]
+        # Subtract the centre value that corresponds to y=0
+        indexy0 = (np.abs(y_coords - 0)).argmin()
+        phase_slice_avg -= phase_slice_avg[indexy0]
+        phase_slice_last -= phase_slice_last[indexy0]
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(y_coords, phase_slice_avg, 'b-', label='MeepSAT Time AvG', linewidth=2)
+        # plt.plot(y_coords, phase_slice_last, 'r--', label='Last Timestep', linewidth=2)
+        if comparision_CST_data is not None:
+            for i in range(len(comparision_CST_data)):
+                # Find CST phase at y=0 to subtract
+                indexy0_cst = (np.abs(cst_efield[i]['Y'] - 0)).argmin()
+                cst_efield[i]['Phase_degrees'] -= cst_efield[i]['Phase_degrees'][indexy0_cst]
+                plt.plot(cst_efield[i]['Y'], cst_efield[i]['Phase_degrees'], 'g-.', label='CST Data', linewidth=2)
+
+        if comparision_GRASP_data is not None:
+            for i in range(len(comparision_GRASP_data)):
+                # Find GRASP phase at y=0 to subtract
+                indexy0_grasp = (np.abs(y_grasp[i] - 0)).argmin()
+                grasp_phase_slice[i] -= grasp_phase_slice[i][indexy0_grasp]
+                plt.plot(y_grasp[i], grasp_phase_slice[i], label='GRASP ({})'.format(comparision_GRASP_data[i]['plot_label']), linewidth=2)
+        plt.xlabel('Y (mm)')
+        plt.ylabel('Phase (degrees)')
+        plt.title(f'E-field Phase Slice Comparison at x = {x_coords[x_index]:.1f} mm ({frequency_label})')
+        plt.legend()
+        plt.grid()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/efield_phase_slice_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+        
+        #! Plot 3: 2D magnitude comparison (side by side)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Time averaged
+        im1 = ax1.imshow(
+            10 * np.log10(np.abs(ez_magnitude_avg)**2 / norm_factor),
+            extent=[np.min(x_coords), np.max(x_coords), np.min(y_coords), np.max(y_coords)],
+            cmap='viridis', vmin=gaussian_fit_power_threshold, vmax=0
+        )
+        ax1.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        ax1.set_xlabel('X (mm)')
+        ax1.set_ylabel('Y (mm)')
+        ax1.set_title(f'Time Averaged E-field Magnitude**2 ({frequency_label})')
+        ax1.grid()
+        plt.colorbar(im1, ax=ax1, label='Power (dB)')
+        
+        # Last timestep
+        im2 = ax2.imshow(
+            10 * np.log10(np.abs(ez_magnitude_last)**2 / norm_factor),
+            extent=[np.min(x_coords), np.max(x_coords), np.min(y_coords), np.max(y_coords)],
+            cmap='viridis', vmin=gaussian_fit_power_threshold, vmax=0
+        )
+        ax2.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        ax2.set_xlabel('X (mm)')
+        ax2.set_ylabel('Y (mm)')
+        ax2.set_title(f'Last Timestep E-field Magnitude**2 ({frequency_label})')
+        ax2.grid()
+        plt.colorbar(im2, ax=ax2, label='Power (dB)')
+        
+        plt.tight_layout()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/efield_magnitude_2D_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+        
+        #! Plot 4: 2D phase comparison (side by side)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Time averaged
+        im1 = ax1.imshow(
+            ez_phase_avg_degrees,
+            extent=[np.min(x_coords), np.max(x_coords), np.min(y_coords), np.max(y_coords)],
+            cmap='twilight', vmin=-180, vmax=180
+        )
+        ax1.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        ax1.set_xlabel('X (mm)')
+        ax1.set_ylabel('Y (mm)')
+        ax1.set_title(f'Time Averaged E-field Phase ({frequency_label})')
+        ax1.grid()
+        plt.colorbar(im1, ax=ax1, label='Phase (degrees)')
+        
+        # Last timestep
+        im2 = ax2.imshow(
+            ez_phase_last_degrees,
+            extent=[np.min(x_coords), np.max(x_coords), np.min(y_coords), np.max(y_coords)],
+            cmap='twilight', vmin=-180, vmax=180
+        )
+        ax2.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        ax2.set_xlabel('X (mm)')
+        ax2.set_ylabel('Y (mm)')
+        ax2.set_title(f'Last Timestep E-field Phase ({frequency_label})')
+        ax2.grid()
+        plt.colorbar(im2, ax=ax2, label='Phase (degrees)')
+        
+        plt.tight_layout()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/efield_phase_2D_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+
+        #! Plot 5: 2D Poynting vector comparison (side by side)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+        # Time averaged
+        im1 = ax1.imshow(
+            10 * np.log10(averaged_poynting_vector / norm_factor),
+            extent=[np.min(x_coords), np.max(x_coords), np.min(y_coords), np.max(y_coords)],
+            cmap='viridis', vmin=gaussian_fit_power_threshold, vmax=0
+        )
+        ax1.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        ax1.set_xlabel('X (mm)')
+        ax1.set_ylabel('Y (mm)')
+        ax1.set_title(f'Time Averaged Poynting Vector Magnitude ({frequency_label})')
+        ax1.grid()
+        plt.colorbar(im1, ax=ax1, label='Power (dB)')   
+
+        # Last timestep
+        im2 = ax2.imshow(
+            10 * np.log10(total_poynting_last / norm_factor),
+            extent=[np.min(x_coords), np.max(x_coords), np.min(y_coords), np.max(y_coords)],
+            cmap='viridis', vmin=gaussian_fit_power_threshold, vmax=0
+        )
+        ax2.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        ax2.set_xlabel('X (mm)')
+        ax2.set_ylabel('Y (mm)')
+        ax2.set_title(f'Last Timestep Poynting Vector Magnitude ({frequency_label})')
+        ax2.grid()
+        plt.colorbar(im2, ax=ax2, label='Power (dB)')   
+        plt.tight_layout()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/poynting_vector_magnitude_2D_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+
+        #! Plot 6: Poynting vector slice comparison at x_position
+        poynting_slice_avg = averaged_poynting_vector[:, x_index]/np.max(averaged_poynting_vector[:, x_index])
+        poynting_slice_last = total_poynting_last[:, x_index]
+        plt.figure(figsize=(10, 6))
+        plt.plot(y_coords, 10 * np.log10(poynting_slice_avg / norm_factor), 
+                'b-', label='MeepSAT Time AvG', linewidth=2)
+        # plt.plot(y_coords, 10 * np.log10(poynting_slice_last / norm_factor), 
+        #          'r--', label='Last Timestep', linewidth=2)
+        if comparision_CST_data is not None:
+            for i in range(len(comparision_CST_data)):
+                plt.plot(cst_s_mag[i]['Y'], cst_s_mag[i]['S_Mag_dB'], 'g-.', label='CST Data', linewidth=2)
+        plt.ylim(-30, 0)
+        plt.xlabel('Y (mm)')  
+        plt.ylabel('S Magnitude (dB)')
+        plt.title(f'Poynting Vector Magnitude Slice Comparison at x = {x_coords[x_index]:.1f} mm ({frequency_label})')
+        plt.legend()
+        plt.grid()
+
+        if savefig:
+            plt.savefig(f'{plot_path}/poynting_vector_magnitude_slice_comparison_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+        if show_plots:
+            plt.show()
+
+        #! Plot 7: POYNTING ANALYSIS: 
+        # Extract the S field distrubution for the full box with only source
+        # Run the real simulation 
+        # Divide those two
+        if average_source_power is not None:
+            sum_source_power_dB = 10 * np.log10(np.sum(average_source_power)/np.max(average_source_power)) 
+            print(f"Sum of Source Power: {np.sum(average_source_power):.4e}")
+            print(f"Sum of Source Power (dB): {sum_source_power_dB:.4f} dB")
+            normalized_poynting_vector_avg = averaged_poynting_vector / sum_source_power_dB
+
+            # Plot contour levels
+            contour_levels_dB = np.linspace(contour_db_range[0], 
+                                            contour_db_range[1], 
+                                            contour_levels)
+            contour_levels_linear = np.linspace(contour_linear_range[0],
+                                                contour_linear_range[1],
+                                                contour_levels)
+
+            # Plot only in dB scale for now
+            plt.figure(figsize=(18, 6))
+            cs = plt.contourf(
+                x_coords, y_coords, 10 * np.log10(normalized_poynting_vector_avg),
+                levels=contour_levels_dB, cmap='viridis'
+            )
+            plt.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+            plt.xlabel('X (mm)')
+            plt.ylabel('Y (mm)')
+            plt.title(f'Time Avg $S$/Sun(source power) ({frequency_label})')
+            plt.colorbar(cs, label='Power (dB)')
+            plt.grid()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/poynting_vector_divided_by_source_power_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()
+
+            #! Plot 7(b): Poynting vector divided by integrated source power
+            # Using trapz to integrate the source power over the y axis (ycoords)
+            integrated_source_power = np.trapz(average_source_power, y_coords)
+            print(f"Integrated Source Power: {integrated_source_power:.4e}")
+            integrated_source_power_dB = 10 * np.log10(integrated_source_power/np.max(average_source_power))
+            print(f"Integrated Source Power (dB): {integrated_source_power_dB:.4f} dB")
+
+            averaged_poynting_vector_divided_source = averaged_poynting_vector / integrated_source_power_dB
+            # Plot contour levels
+            contour_levels_dB = np.linspace(contour_db_range[0], 
+                                            contour_db_range[1], 
+                                            contour_levels)
+            contour_levels_linear = np.linspace(contour_linear_range[0],
+                                                contour_linear_range[1],
+                                                contour_levels)
+            # Plot only in dB scale for now
+            plt.figure(figsize=(18, 6))
+            cs = plt.contourf(
+                x_coords, y_coords, 10 * np.log10(averaged_poynting_vector_divided_source),
+                levels=contour_levels_dB, cmap='viridis'
+            )
+            plt.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+            plt.xlabel('X (mm)')
+            plt.ylabel('Y (mm)')
+            plt.title(f'Time Avg $S$/Integrated Source Power ({frequency_label})')
+            plt.colorbar(cs, label='Power (dB)')
+            plt.grid()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/poynting_vector_divided_by_integrated_source_power_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()
+
+        #! Plot 7(c): Doing the same thing, but for the average power calculated from avg efield
+        if average_source_power is not None:
+            sum_source_power_dB = 10 * np.log10(np.sum(average_source_power)/np.max(average_source_power))
+            print(f"Sum of Source Power: {np.sum(average_source_power):.4e}")
+            print(f"Sum of Source Power (dB): {sum_source_power_dB:.4f} dB")
+            normalized_efieldpower_vector_avg = 10*np.log10(np.abs(ez_magnitude_avg)**2) / sum_source_power_dB
+            # Plot contour levels
+            contour_levels_dB = np.linspace(contour_db_range[0], 
+                                            contour_db_range[1], 
+                                            contour_levels)
+            contour_levels_linear = np.linspace(contour_linear_range[0],
+                                                contour_linear_range[1],
+                                                contour_levels) 
+            
+            # Plot only in dB scale for now
+            plt.figure(figsize=(18, 6))
+            cs = plt.contourf(
+                x_coords, y_coords, normalized_efieldpower_vector_avg,
+                levels=contour_levels_dB, cmap='viridis'
+            )
+            plt.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+            plt.xlabel('X (mm)')
+            plt.ylabel('Y (mm)')
+            plt.title(f'Time Avg |E|^2/Sun(source power) ({frequency_label})')
+            plt.colorbar(cs, label='Power (dB)')
+            plt.grid()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/efield_power_divided_by_source_power_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()
+
+            # ! Plot 7(d): Poynting vector divided by integrated source power
+            # Using trapz to integrate the source power over the y axis (ycoords)
+            integrated_source_power = np.trapz(average_source_power, y_coords)
+            print(f"Integrated Source Power: {integrated_source_power:.4e}")
+            integrated_source_power_dB = 10 * np.log10(integrated_source_power/np.max(average_source_power))
+            print(f"Integrated Source Power (dB): {integrated_source_power_dB:.4f} dB")
+            averaged_Efieldpower_divided_by_source = 10*np.log10(np.abs(ez_magnitude_avg)**2) / integrated_source_power_dB
+            
+            # Plot in dB scale for now
+            plt.figure(figsize=(18, 6))
+            cs = plt.contourf(
+                x_coords, y_coords, averaged_Efieldpower_divided_by_source,
+                levels=contour_levels_dB, cmap='viridis'
+            )
+            plt.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+            plt.xlabel('X (mm)')
+            plt.ylabel('Y (mm)')
+            plt.title(f'Time Avg |E|^2/Integrated Source Power ({frequency_label})')
+            plt.colorbar(cs, label='Power (dB)')
+            plt.grid()
+
+            if savefig:
+                plt.savefig(f'{plot_path}/efield_power_divided_by_integrated_source_power_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.png', dpi=300)
+            if show_plots:
+                plt.show()    
+        
+
+        # #! Plot 7: Poynting vectot divided by source (2D) comparison (side by side) in linear scale
+        # if norm_factor is not None:
+        #     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+        #     # Time averaged
+        #     im1 = ax1.imshow(
+        #         averaged_poynting_vector_divided_source,
+        #         extent=[np.min(x_coords), np.max(x_coords), np.min(y_coords), np.max(y_coords)],
+        #         cmap='viridis'
+        #     )
+        #     ax1.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        #     ax1.set_xlabel('X (mm)')
+        #     ax1.set_ylabel('Y (mm)')
+        #     ax1.set_title(f'Time Averaged Poynting Vector / Source ({frequency_label})')
+        #     ax1.grid()
+        #     plt.colorbar(im1, ax=ax1, label='Normalized Power')   
+
+        #     # Last timestep
+        #     im2 = ax2.imshow(
+        #         total_poynting_last_divided_source,
+        #         extent=[np.min(x_coords), np.max(x_coords), np.min(y_coords), np.max(y_coords)],
+        #         cmap='viridis'
+        #     )
+        #     ax2.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        #     ax2.set_xlabel('X (mm)')
+        #     ax2.set_ylabel('Y (mm)')
+        #     ax2.set_title(f'Last Timestep Poynting Vector / Source ({frequency_label})')
+        #     ax2.grid()
+        #     plt.colorbar(im2, ax=ax2, label='Normalized Power')   
+
+        #     plt.tight_layout()
+        #     plt.show()
+
+        # #! Plot 8: Same as that of Plot 7 but in contour plot
+        # if norm_factor is not None:
+        #     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+        #     # Time averaged
+        #     cs1 = ax1.contourf(
+        #         x_coords, y_coords, averaged_poynting_vector_divided_source,
+        #         levels=contour_levels, cmap='viridis'
+        #     )
+        #     ax1.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        #     ax1.set_xlabel('X (mm)')
+        #     ax1.set_ylabel('Y (mm)')
+        #     ax1.set_title(f'Time Averaged Poynting Vector / Source ({frequency_label})')
+        #     ax1.grid()
+        #     plt.colorbar(cs1, ax=ax1, label='Normalized Power')   
+
+        #     # Last timestep
+        #     cs2 = ax2.contourf(
+        #         x_coords, y_coords, total_poynting_last_divided_source,
+        #         levels=contour_levels, cmap='viridis'
+        #     )
+        #     ax2.axvline(x=x_coords[x_index], color='r', linestyle='--', alpha=0.7)
+        #     ax2.set_xlabel('X (mm)')
+        #     ax2.set_ylabel('Y (mm)')
+        #     ax2.set_title(f'Last Timestep Poynting Vector / Source ({frequency_label})')
+        #     ax2.grid()
+        #     plt.colorbar(cs2, ax=ax2, label='Normalized Power')   
+
+        #     plt.tight_layout()
+        #     plt.show()
+
+        
+        return {
+            'ez_magnitude_avg': ez_magnitude_avg,
+            'ez_phase_avg_degrees': ez_phase_avg_degrees,
+            'ez_magnitude_last': ez_magnitude_last,
+            'ez_phase_last_degrees': ez_phase_last_degrees,
+            'x_coords': x_coords,
+            'y_coords': y_coords,
+            'aperture_slice_avg': aperture_slice_avg,
+            'aperture_slice_last_timestep': aperture_slice_last,
+
+        }
+    
+
 
 def average_source_power(source_power_files, aper_size, freq, efield_index = 2):
     import numpy as np
@@ -3260,107 +4607,107 @@ def convert_grasp_to_dict(data):
     return grasp_data
 
 
-def custom_beam_FT(sim_res,
-                    list_efields,
-                    aper_size,          
-                    zero_pad = 15,
-                    savebeam = False,
-                    parallel = False,
-                    filename = None):
+# def custom_beam_FT(sim_res,
+#                     list_efields,
+#                     aper_size,          
+#                     zero_pad = 15,
+#                     savebeam = False,
+#                     parallel = False,
+#                     filename = None):
 
-    '''
-    Gets the Fourier Transforms of the complex electric fields at aperture.
+#     '''
+#     Gets the Fourier Transforms of the complex electric fields at aperture.
 
-    Arguments
-    ---------
-    zero_pad : float, optional
-        Multiplicative factor to the length of the field list,
-        which is padded with zeros in the added length.
+#     Arguments
+#     ---------
+#     zero_pad : float, optional
+#         Multiplicative factor to the length of the field list,
+#         which is padded with zeros in the added length.
 
-    Returns
-    -------
-    freq : array
-        List of the frequencies at which the FFT has been done
-    FFTs : list of arrays
-        Each array contains the FFT for the k-th source.
-    '''
+#     Returns
+#     -------
+#     freq : array
+#         List of the frequencies at which the FFT has been done
+#     FFTs : list of arrays
+#         Each array contains the FFT for the k-th source.
+#     '''
 
-    # Ensure list_efields is a list of arrays, not a single value
-    if not isinstance(list_efields, list):
-        list_efields = [list_efields]
+#     # Ensure list_efields is a list of arrays, not a single value
+#     if not isinstance(list_efields, list):
+#         list_efields = [list_efields]
     
-    # Check if each element is an array
-    for i, efield in enumerate(list_efields):
-        if not hasattr(efield, '__len__') or np.isscalar(efield):
-            raise ValueError(f"list_efields[{i}] must be an array, got {type(efield)}")
+#     # Check if each element is an array
+#     for i, efield in enumerate(list_efields):
+#         if not hasattr(efield, '__len__') or np.isscalar(efield):
+#             raise ValueError(f"list_efields[{i}] must be an array, got {type(efield)}")
 
-    #Initialize the list
-    FFTs = [[] for k in range(len(list_efields))]
+#     #Initialize the list
+#     FFTs = [[] for k in range(len(list_efields))]
 
-    res = sim_res
+#     res = sim_res
 
-    #List of frequencies
-    freq = np.fft.fftfreq(len(list_efields[0])*zero_pad, d = 1/res)
+#     #List of frequencies
+#     freq = np.fft.fftfreq(len(list_efields[0])*zero_pad, d = 1/res)
 
-    #Iterate over the number of sources
-    for k in range(len(list_efields)):
+#     #Iterate over the number of sources
+#     for k in range(len(list_efields)):
 
-        #FFT over the field
-        fft = np.fft.fft(list_efields[k], 
-                n = zero_pad*len(list_efields[k]))
+#         #FFT over the field
+#         fft = np.fft.fft(list_efields[k], 
+#                 n = zero_pad*len(list_efields[k]))
 
-        #FFT is normalized by its max
-        FFTs[k] = np.abs(fft) 
-        FFTs[k] = FFTs[k]/np.max(FFTs[k])
+#         #FFT is normalized by its max
+#         FFTs[k] = np.abs(fft) 
+#         FFTs[k] = FFTs[k]/np.max(FFTs[k])
 
-    if savebeam:
-        # Helper function to create dataset with appropriate parameters
-        def create_flexible_dataset(h, name, data, dtype):
-            # Check if data is scalar (has no length) or is a 0-dimensional array
-            is_scalar = np.isscalar(data) or (isinstance(data, np.ndarray) and data.ndim == 0)
+#     if savebeam:
+#         # Helper function to create dataset with appropriate parameters
+#         def create_flexible_dataset(h, name, data, dtype):
+#             # Check if data is scalar (has no length) or is a 0-dimensional array
+#             is_scalar = np.isscalar(data) or (isinstance(data, np.ndarray) and data.ndim == 0)
             
-            if parallel:
-                # No compression in parallel mode
-                h.create_dataset(name, data=data, dtype=dtype)
-            else:
-                # Only apply compression if not scalar
-                if is_scalar:
-                    h.create_dataset(name, data=data, dtype=dtype)
-                else:
-                    h.create_dataset(name, data=data, dtype=dtype, compression='gzip')
+#             if parallel:
+#                 # No compression in parallel mode
+#                 h.create_dataset(name, data=data, dtype=dtype)
+#             else:
+#                 # Only apply compression if not scalar
+#                 if is_scalar:
+#                     h.create_dataset(name, data=data, dtype=dtype)
+#                 else:
+#                     h.create_dataset(name, data=data, dtype=dtype, compression='gzip')
                 
-        if parallel:
-            from mpi4py import MPI
-            comm = MPI.COMM_WORLD
-            if not h5py.get_config().mpi:
-                raise ValueError("h5py was built without MPI support, can't use mpio driver")
+#         if parallel:
+#             from mpi4py import MPI
+#             comm = MPI.COMM_WORLD
+#             if not h5py.get_config().mpi:
+#                 raise ValueError("h5py was built without MPI support, can't use mpio driver")
             
-            with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
-                create_flexible_dataset(h, 'freq', freq, 'float64')
-                create_flexible_dataset(h, 'beams', FFTs, 'float64')
-                aper = aper_size
-                create_flexible_dataset(h, 'aper_size', aper, 'float64')
-        else:
-            # # Only have rank 0 create the file in non-parallel mode
-            # from mpi4py import MPI
-            # comm = MPI.COMM_WORLD
-            # rank = comm.Get_rank()
+#             with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
+#                 create_flexible_dataset(h, 'freq', freq, 'float64')
+#                 create_flexible_dataset(h, 'beams', FFTs, 'float64')
+#                 aper = aper_size
+#                 create_flexible_dataset(h, 'aper_size', aper, 'float64')
+#         else:
+#             # # Only have rank 0 create the file in non-parallel mode
+#             # from mpi4py import MPI
+#             # comm = MPI.COMM_WORLD
+#             # rank = comm.Get_rank()
             
-            # if rank == 0:
-            #     with h5py.File(filename + '.h5', 'w', libver='latest') as h:
-            #         create_flexible_dataset(h, 'freq', freq, 'float64')
-            #         create_flexible_dataset(h, 'beams', FFTs, 'float64')
-            #         aper = aper_size
-            #         create_flexible_dataset(h, 'aper_size', aper, 'float64')
-            # comm.barrier()  # Ensure all processes wait for file creation
-            # Just save without MPI
-            with h5py.File(filename + '.h5', 'w', libver='latest') as h:
-                create_flexible_dataset(h, 'freq', freq, 'float64')
-                create_flexible_dataset(h, 'beams', FFTs, 'float64')
-                aper = aper_size
-                create_flexible_dataset(h, 'aper_size', aper, 'float64')
+#             # if rank == 0:
+#             #     with h5py.File(filename + '.h5', 'w', libver='latest') as h:
+#             #         create_flexible_dataset(h, 'freq', freq, 'float64')
+#             #         create_flexible_dataset(h, 'beams', FFTs, 'float64')
+#             #         aper = aper_size
+#             #         create_flexible_dataset(h, 'aper_size', aper, 'float64')
+#             # comm.barrier()  # Ensure all processes wait for file creation
+#             # Just save without MPI
+#             with h5py.File(filename + '.h5', 'w', libver='latest') as h:
+#                 create_flexible_dataset(h, 'freq', freq, 'float64')
+#                 create_flexible_dataset(h, 'beams', FFTs, 'float64')
+#                 aper = aper_size
+#                 create_flexible_dataset(h, 'aper_size', aper, 'float64')
 
-        return freq, FFTs
+#         return freq, FFTs
     
 
 def efield_list_from_monitors_from_lens1(current_dir, freq_folder_array, time_array, file_format, resolution='10'):

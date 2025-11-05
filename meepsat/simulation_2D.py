@@ -1,3 +1,6 @@
+
+
+
 """
 In case we want to use our own version of MEEP
 
@@ -27,6 +30,301 @@ import meepsat.components_2D_meep as comp # Importing the components made using 
 import meepsat.components_2D_eps as comp_eps # Importing the components made using the epsilon functions
 # import meep_visualization_meepsat_ver as mpsat_plt # Importing the plotting functions
 import meepsat.extra_functions as exf # Importing the extra functions
+
+
+def check_resolution_and_pml(data,
+                             mpsat_sim,
+                             meep_sim = None,
+                             smallest_freq: float = None,
+                             highest_n: float = None):
+    """
+    Function to check if the resolution and pml are sufficient for the simulation
+
+    Arguments
+    ---------
+    data : dict
+        Dictionary containing the simulation parameters (extracted from the json file)
+    meep_sim: meep Simulation object
+        MEEP simulation object
+    highest_freq : float
+        Highest frequency of the source in meep units
+    highest_n : float
+        Highest refractive index of the materials in the simulation box
+
+    Returns
+    -------
+    data : dict
+        Updated dictionary containing the simulation parameters (extracted from the json file)
+    """
+    if meep_sim is None and highest_n is None:
+        raise ValueError("Either the MEEP simulation object or the highest refractive index must be provided to check the resolution and PML thickness.")
+
+
+    #! 1ST step: Extract the highest refractive index from the epsilon data
+    if highest_n is None:
+        #! 0TH step: Run the simulation to extract the epsilon data
+        print("No highest refractive index provided. Extracting the highest refractive index from the epsilon data...")
+        print("Running a quick simulation to extract the epsilon data for checking the resolution and PML thickness...")
+        meep_sim.run(until=0)
+        print("Simulation run complete!")
+        print("Extracting the epsilon data...")
+        epsilon_map = meep_sim.get_epsilon() 
+        highest_n = np.sqrt(np.max(epsilon_map))
+        print("Highest refractive index in the simulation box: ", highest_n)
+    else:
+        print("Highest refractive index provided: ", highest_n)
+
+    #! Checking the PML thickness and factor
+    given_pml_thickness = data['boundary_layers']['boundary']['size']*data['boundary_layers']['boundary']['factor_dpml']
+    
+    # Print statements for old PML and resolution values
+    print("Given PML thickness: ", given_pml_thickness)
+    print("Given resolution: ", data["simulation"]['primary_params']['resolution'])
+
+    #! Checking the source frequency and assuming it to be the largest frequency present in the system
+    if "sources" in data:
+        print("Assuming the wavelength of the Source to be the largest wavelength present in the system and doing a sanity check on the PML thickness.")
+        for source in data["sources"]:
+            wavelength_meep_source = 1 / data["sources"][source]["frequecy"]  # Wavelength in MEEP unit
+            min_pml_thickness = 0.5*wavelength_meep_source # Source: https://meep-hr.readthedocs.io/en/latest/FAQ/#checking-convergence
+            if given_pml_thickness < min_pml_thickness:
+                print(f"PML thickness {given_pml_thickness} is less than the minimum required {min_pml_thickness}. Setting PML thickness to {min_pml_thickness}.")
+                data['boundary_layers']['boundary']['size'] = min_pml_thickness
+
+    if smallest_freq is not None:
+        print("Smallest frequency provided: ", smallest_freq)
+        wavelength_meep_largest = 1 / smallest_freq  # Wavelength in MEEP unit
+        # It should at least 1/2 wavelength_meep_ of the source
+        min_pml_thickness = 0.5*wavelength_meep_largest # Source: https://meep-hr.readthedocs.io/en/latest/FAQ/#checking-convergence
+        if given_pml_thickness < min_pml_thickness:
+            print(f"PML thickness {given_pml_thickness} is less than the minimum required {min_pml_thickness}. Setting PML thickness to {min_pml_thickness}.")
+            data['boundary_layers']['boundary']['size'] = min_pml_thickness
+
+    if highest_n is not None:
+        print("Highest refractive index provided: ", highest_n)
+        if "sources" in data:
+            for source in data["sources"]:
+                wavelength_meep_ = 1 / data["sources"][source]["frequecy"]  # Wavelength in MEEP unit
+                wavelength_meep_inside_medium = wavelength_meep_ / highest_n  # Wavelength in MEEP unit inside the medium
+                min_pml_thickness = 0.5*wavelength_meep_inside_medium # Source: https://meep-hr.readthedocs.io/en/latest/FAQ/#checking-convergence
+                if given_pml_thickness < min_pml_thickness:
+                    print(f"PML thickness {given_pml_thickness} is less than the minimum required {min_pml_thickness}. Setting PML thickness to {min_pml_thickness}.")
+                    data['boundary_layers']['boundary']['size'] = min_pml_thickness
+
+    
+
+    #! Check if the resolution criteria is met or not for the highest refractive index
+    if highest_n is not None:
+        print("Highest refractive index provided: ", highest_n)
+        wavelength_meep_ = 1 / data["sources"]['source1']["frequecy"]  # Wavelength in MEEP unit
+        wavelength_meep_inside_medium = wavelength_meep_ / highest_n  # Wavelength in MEEP unit inside the medium
+        freq_inside_medium = 1 / wavelength_meep_inside_medium  # Frequency inside the medium
+        if data["simulation"]['primary_params']['resolution'] / freq_inside_medium < 8:
+            print("Resolution criteria doesn't meet the criteria for the smallest frequency. Increasing the resolution to meet the criteria.")
+            print("Wavelength Meep: ", wavelength_meep_)
+            print("Wavelength Meep inside medium: ", wavelength_meep_inside_medium)
+            data["simulation"]['primary_params']['resolution'] = int(freq_inside_medium * 8)
+
+    #! Checking if the resolution criteria is met or not for the source's frequency
+    # resolution/frequency ratio should be at least 10   
+    if "sources" in data:
+        print("Assuming the wavelength of the Source to be the largest wavelength present in the system and doing a sanity check on the PML thickness.")
+        for source in data["sources"]:
+            if data["simulation"]['primary_params']['resolution'] / data["sources"][source]["frequecy"] < 10:
+                print("Resolution criteria doesn't meet the criteria for the provided source frequency. Increasing the resolution to meet the criteria.")
+                data["simulation"]['primary_params']['resolution'] = int(data["sources"][source]["frequecy"] * 8)
+
+    #! Checking if the resolution criteria is met or not for the smallest frequency
+    if smallest_freq is not None:
+        print("Smallest frequency provided: ", smallest_freq)
+        if data["simulation"]['primary_params']['resolution'] / smallest_freq < 10:
+            print("Resolution criteria doesn't meet the criteria for the smallest frequency. Increasing the resolution to meet the criteria.")
+            data["simulation"]['primary_params']['resolution'] = int(smallest_freq * 8)
+
+    #! Now assuming the smallest frequency present in the system is the ARC thickness (lambda/4 assumption)
+    # check if data["lenses"] exists in data
+    if "lenses" in data:
+        #! Important: THE BELOW TWO LIST WILL CONTAIN THE VALUES FOR ALL THE LENGTH SCALES AND REFRACTIVE INDICES PRESEENT IN THE DIFFERENT LENSES 
+        arc_length_arr = []; 
+        arc_n_arr = []
+        for lens in data["lenses"]:
+            # Checking for #! Single ARC parameters
+            if "AR_left" in data["lenses"][lens] or "AR_right" in data["lenses"][lens]:
+                arc_length_arr.append(data["lenses"][lens]["AR_left"])
+                arc_length_arr.append(data["lenses"][lens]["AR_right"])
+                arc_n_arr.append(data["lenses"][lens]["AR_material"])
+
+            # Checking for #! Multi-layer ARC parameters
+            if "AR_left_layers" in data["lenses"][lens]:
+                arc_length_arr.extend(data["lenses"][lens]["AR_left_layers"])
+                arc_n_arr.extend(data["lenses"][lens]["AR_left_materials"])
+            if "AR_right_layers" in data["lenses"][lens]:
+                arc_length_arr.extend(data["lenses"][lens]["AR_right_layers"])
+                arc_n_arr.extend(data["lenses"][lens]["AR_right_materials"])
+
+
+            # Checking for #! Stepped pyramid ARC parameters
+            if "ARC_type" in data["lenses"][lens]:
+                if data["lenses"][lens]["ARC_type"] == "stepped_pyramid":
+                    # Since pitch is a single float value and kerf, width are lists
+                    arc_length_arr.append(data["lenses"][lens]["step_ARC_pitch"])  # Remove the brackets
+                    arc_length_arr.extend(data["lenses"][lens]["step_ARC_kerf"])
+                    arc_length_arr.extend(data["lenses"][lens]["step_ARC_depth"])
+                    # Appending the materials
+                    # Check if step_ARC_material_nref is a list or a single value
+                    material_nref = data["lenses"][lens]["step_ARC_material_nref"]
+                    if isinstance(material_nref, list):
+                        arc_n_arr.extend(material_nref)
+                    else:
+                        # If it's a single float value, append it instead of extend
+                        arc_n_arr.append(material_nref)
+
+            # Checking for #! Delamination layer parameters
+            if "delam_thick" in data["lenses"][lens]:
+                if data["lenses"][lens]["delam_thick"] != 0:
+                    arc_length_arr.append(data["lenses"][lens]["delam_thick"])
+                    arc_length_arr.append(data["lenses"][lens]["delam_width"])
+
+            # Checking for #! Surface error parameters
+            #!! UPDATE THIS LATER WHEN YOU ARE USING SURFACE ERROR IN THE SIMULATION
+
+        # ! Now checking the resolution criteria for all the arc_n_arr 
+        for n in arc_n_arr:
+            wavelength_meep_inside_medium = wavelength_meep_ / n  # Wavelength in MEEP unit inside the medium
+            freq_inside_medium = 1 / wavelength_meep_inside_medium  # Frequency inside the medium
+            if data["simulation"]['primary_params']['resolution'] / freq_inside_medium < 8:
+                print("Resolution criteria doesn't meet the criteria for the ARC layers. Increasing the resolution to meet the criteria.")
+                data["simulation"]['primary_params']['resolution'] = int(freq_inside_medium * 8)
+
+        #! Checking the resolution criteria for all the arc_length_arr
+        for wavelength_meep_arc in arc_length_arr:
+            # Add validation to ensure wavelength_meep_arc is a scalar
+            if isinstance(wavelength_meep_arc, (list, tuple)):
+                # If it's accidentally a list, extract the first element or flatten
+                if len(wavelength_meep_arc) > 0:
+                    wavelength_meep_arc = wavelength_meep_arc[0]
+                else:
+                    continue
+            
+            if wavelength_meep_arc == 0:
+                print(f"Warning: Found zero wavelength in arc_length_arr, skipping...")
+                continue
+                
+            freq_arc = 1 / wavelength_meep_arc  # Frequency corresponding to the ARC layer thickness
+            if data["simulation"]['primary_params']['resolution'] / freq_arc < 8:
+                print("Resolution criteria doesn't meet the criteria for the ARC layers. Increasing the resolution to meet the criteria.")
+                data["simulation"]['primary_params']['resolution'] = int(freq_arc * 8)
+
+
+
+    mpsat_sim.resolution = data["simulation"]['primary_params']['resolution']
+    
+    print("All length scales of lenses in the simulation: ", arc_length_arr)
+    print("All refractive indices of different components in the of lense in the simulation: ", arc_n_arr)
+    print("Modified resolution: ", data["simulation"]['primary_params']['resolution'])
+    print("Modified PML thickness: ", data['boundary_layers']['boundary']['size']*data['boundary_layers']['boundary']['factor_dpml'])
+
+    return data, mpsat_sim
+
+            
+
+def convert_to_meep_units(self, value, unit_type, from_unit='um'):
+    """
+    Converts real-world units to MEEP simulation units.
+    
+    In MEEP, the simulation uses normalized units where c=1. This function helps
+    convert from physical units to MEEP's normalized units based on a chosen
+    length scale.
+    
+    Parameters:
+    ----------
+    value : float
+        The numerical value to convert
+    unit_type : str
+        The type of unit being converted:
+        - 'length': Length units (e.g., μm to MEEP units)
+        - 'frequency': Frequency units (e.g., THz to MEEP units)
+        - 'time': Time units (e.g., ps to MEEP units)
+    from_unit : str, optional
+        The physical unit to convert from. Default is 'um' (micrometers).
+        Supported units:
+        - Length: 'nm', 'um', 'mm', 'm'
+        - Frequency: 'Hz', 'GHz', 'THz'
+        - Time: 'fs', 'ps', 'ns', 's'
+    
+    Returns:
+    -------
+    float
+        The converted value in MEEP units
+    
+    Examples:
+    --------
+    # Convert 1.55 μm wavelength to MEEP units
+    wavelength_meep = convert_to_meep_units(1.55, 'length', 'um')
+    
+    # Convert 193 THz frequency to MEEP units
+    freq_meep = convert_to_meep_units(193, 'frequency', 'THz')
+    
+    # Convert 100 fs time to MEEP units
+    time_meep = convert_to_meep_units(100, 'time', 'fs')
+    """
+    # Speed of light in m/s
+    c = 299792458
+
+    # Define the base length unit (default is μm)
+    length_scale = 1.0  # MEEP units
+
+    # Length conversion factors to meters
+    length_to_meters = {
+        'nm': 1e-9,
+        'um': 1e-6,
+        'mm': 1e-3,
+        'm': 1.0
+    }
+    
+    # Frequency conversion factors to Hz
+    freq_to_hz = {
+        'Hz': 1.0,
+        'GHz': 1e9,
+        'THz': 1e12
+    }
+    
+    # Time conversion factors to seconds
+    time_to_seconds = {
+        'fs': 1e-15,
+        'ps': 1e-12,
+        'ns': 1e-9,
+        's': 1.0
+    }
+    
+    if unit_type == 'length':
+        if from_unit not in length_to_meters:
+            raise ValueError(f"Unsupported length unit: {from_unit}. Use one of {list(length_to_meters.keys())}")
+        # Convert length to MEEP units (normalized to length_scale)
+        return value * length_to_meters[from_unit] / (length_to_meters['um'] * length_scale)
+    
+    elif unit_type == 'frequency':
+        if from_unit not in freq_to_hz:
+            raise ValueError(f"Unsupported frequency unit: {from_unit}. Use one of {list(freq_to_hz.keys())}")
+        # Convert frequency to MEEP units
+        frequency_hz = value * freq_to_hz[from_unit]
+        wavelength_m = c / frequency_hz
+        return length_to_meters['um'] * length_scale / wavelength_m
+    
+    elif unit_type == 'time':
+        if from_unit not in time_to_seconds:
+            raise ValueError(f"Unsupported time unit: {from_unit}. Use one of {list(time_to_seconds.keys())}")
+        # Convert time to MEEP units
+        time_s = value * time_to_seconds[from_unit]
+        return time_s * c / (length_to_meters['um'] * length_scale)
+    
+    else:
+        raise ValueError("Unit type must be 'length', 'frequency', or 'time'")
+
+        
+
+
+
 
 class sim_init():
     """
@@ -123,100 +421,6 @@ class sim_init():
         # ! REST IS IMP: BUT THESE TWO ARE VERY IMPORTANT PARAMETERS FOR THE SIMULATION
         self.meep_geometry = [] # List to store the optical components made using the MEEP functions
         self.eps_geometry = [] # List to store the optical components made using the epsilon functions
-
-
-    def convert_to_meep_units(self, value, unit_type, from_unit='um'):
-        """
-        Converts real-world units to MEEP simulation units.
-        
-        In MEEP, the simulation uses normalized units where c=1. This function helps
-        convert from physical units to MEEP's normalized units based on a chosen
-        length scale.
-        
-        Parameters:
-        ----------
-        value : float
-            The numerical value to convert
-        unit_type : str
-            The type of unit being converted:
-            - 'length': Length units (e.g., μm to MEEP units)
-            - 'frequency': Frequency units (e.g., THz to MEEP units)
-            - 'time': Time units (e.g., ps to MEEP units)
-        from_unit : str, optional
-            The physical unit to convert from. Default is 'um' (micrometers).
-            Supported units:
-            - Length: 'nm', 'um', 'mm', 'm'
-            - Frequency: 'Hz', 'GHz', 'THz'
-            - Time: 'fs', 'ps', 'ns', 's'
-        
-        Returns:
-        -------
-        float
-            The converted value in MEEP units
-        
-        Examples:
-        --------
-        # Convert 1.55 μm wavelength to MEEP units
-        wavelength_meep = convert_to_meep_units(1.55, 'length', 'um')
-        
-        # Convert 193 THz frequency to MEEP units
-        freq_meep = convert_to_meep_units(193, 'frequency', 'THz')
-        
-        # Convert 100 fs time to MEEP units
-        time_meep = convert_to_meep_units(100, 'time', 'fs')
-        """
-        # Speed of light in m/s
-        c = 299792458
-
-        # Define the base length unit (default is μm)
-        length_scale = 1.0  # MEEP units
-
-        # Length conversion factors to meters
-        length_to_meters = {
-            'nm': 1e-9,
-            'um': 1e-6,
-            'mm': 1e-3,
-            'm': 1.0
-        }
-        
-        # Frequency conversion factors to Hz
-        freq_to_hz = {
-            'Hz': 1.0,
-            'GHz': 1e9,
-            'THz': 1e12
-        }
-        
-        # Time conversion factors to seconds
-        time_to_seconds = {
-            'fs': 1e-15,
-            'ps': 1e-12,
-            'ns': 1e-9,
-            's': 1.0
-        }
-        
-        if unit_type == 'length':
-            if from_unit not in length_to_meters:
-                raise ValueError(f"Unsupported length unit: {from_unit}. Use one of {list(length_to_meters.keys())}")
-            # Convert length to MEEP units (normalized to length_scale)
-            return value * length_to_meters[from_unit] / (length_to_meters['um'] * length_scale)
-        
-        elif unit_type == 'frequency':
-            if from_unit not in freq_to_hz:
-                raise ValueError(f"Unsupported frequency unit: {from_unit}. Use one of {list(freq_to_hz.keys())}")
-            # Convert frequency to MEEP units
-            frequency_hz = value * freq_to_hz[from_unit]
-            wavelength_m = c / frequency_hz
-            return length_to_meters['um'] * length_scale / wavelength_m
-        
-        elif unit_type == 'time':
-            if from_unit not in time_to_seconds:
-                raise ValueError(f"Unsupported time unit: {from_unit}. Use one of {list(time_to_seconds.keys())}")
-            # Convert time to MEEP units
-            time_s = value * time_to_seconds[from_unit]
-            return time_s * c / (length_to_meters['um'] * length_scale)
-        
-        else:
-            raise ValueError("Unit type must be 'length', 'frequency', or 'time'")
 
 
     def print_simulation_parameters(self):

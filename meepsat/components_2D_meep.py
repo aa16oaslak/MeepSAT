@@ -1,3 +1,61 @@
+import sys
+import os
+import site
+from pathlib import Path
+
+# First check for MEEPSAT_PATH environment variable (highest priority)
+meepsat_env_path = os.environ.get('MEEPSAT_PATH')
+if meepsat_env_path and os.path.exists(os.path.join(meepsat_env_path, 'meepsat')):
+    print(f"Using MEEPSAT from environment variable: {{meepsat_env_path}}")
+    main_dir = meepsat_env_path
+    meepsat_dir = os.path.join(main_dir, 'meepsat')
+    sys.path.append(main_dir)
+    sys.path.append(meepsat_dir)
+    meepsat_found = True
+else:
+    # Method 1: Try to import directly if MEEPSAT is installed properly
+    try:
+        import meepsat
+        print("MEEPSAT found in installed packages")
+        meepsat_dir = os.path.dirname(meepsat.__file__)
+        main_dir = os.path.dirname(meepsat_dir)
+        sys.path.append(meepsat_dir)  # Add meepsat directory to path for submodule imports
+        meepsat_found = True
+    except ImportError:
+        # Method 2: Try to find MEEPSAT in common locations
+        possible_paths = [
+            Path.cwd().parent,                     # Parent of current directory
+            Path.cwd(),                           # Current directory
+            Path(__file__).resolve().parent.parent,  # Parent of script directory
+            Path.home() / "Phd_work/MEEPSAT_WFH",      # User's home directory + common path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH'),   # HPC specific path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH')    # Another HPC specific path
+        ]
+        
+        meepsat_found = False
+        for path in possible_paths:
+            try:
+                meepsat_dir = path / "meepsat"
+                if meepsat_dir.exists():
+                    main_dir = str(path)
+                    meepsat_dir = str(meepsat_dir)
+                    sys.path.append(main_dir)
+                    sys.path.append(meepsat_dir)  # Critical: add meepsat directory for submodule imports
+                    print(f"MEEPSAT found at: {{meepsat_dir}}")
+                    meepsat_found = True
+                    break
+            except Exception as e:
+                print(f"Error checking path {{path}}: {{e}}")
+        
+        if not meepsat_found:
+            print("WARNING: MEEPSAT directory not found automatically.")
+            print("Please set the MEEPSAT_PATH environment variable before running.")
+            print("For example: export MEEPSAT_PATH=/path/to/MEEPSAT")
+            main_dir = "."
+            meepsat_dir = "./meepsat"
+            sys.path.append(main_dir)
+            sys.path.append(meepsat_dir)
+
 """
 In case we want to use our own version of MEEP
 
@@ -922,59 +980,6 @@ class Boundary():
 # * ############################################################################################################
 # * ############################################################################################################
 # * Extracting some classes from the MEEPART package
-# ~ FOREBAFFLE CLASS
-
-
-
-# ~ ABSORBER CLASS
-class Absorber(object):
-    '''
-    Class defining a wall made of absorbing material.
-    '''
-    def __init__(self, thick, center, name = None, 
-                epsilon_real = 3.5, epsilon_imag = 0.11025, freq = 1/3):
-        '''
-        Defines the attributes of the absorber object
-
-        Arguments
-        ---------
-        name : str, optional
-            Name of object (default : None)
-        thick : float
-            Thickness of the tube walls 
-        center : float
-            Center of the tube walls along the y-axis
-            Needs to account for half a thickness
-        epsilon_real : float, optional 
-            Real part of the permittivity of the material (default : 3.5)
-        epsilon_imag : float, optional
-            Imaginary part, i.e. conductivity, of the material 
-            (default : 0.11025)
-        freq : float, optional
-            Frequency at which the sim will be run.
-            Needed to set the material property accordingly (default : 0.33)
-
-        Notes
-        -----
-        The values given are set by default to be ECCOSORB CR110 @ 100 GHz
-        -> eps_real = 3.5, eps_imag = 0.11025, freq = 1/3
-        When meep units distance is mm.
-        '''
-
-        self.name = name                        
-        self.object_type = 'Absorber'           
-        self.thick = thick                      
-        self.center = center                    
-        self.epsilon_real = epsilon_real            
-        self.epsilon_imag = epsilon_imag            
-        self.freq = freq                        
-        self.conductivity = epsilon_imag*2*np.pi*freq/epsilon_real
-
-    def __str__(self):
-        if self.name is not None :
-            return self.name + ', thickness ' + str(self.thick)
-        else :
-            return 'Absorber walls, thickness ' + str(self.thick)
 
 class Filter(object):
     """
@@ -1485,13 +1490,26 @@ class PyramidalAbsorbers(object):
         self.y_coverage_start = y_coverage_start
         self.y_coverage_end = y_coverage_end
         
+        # Validate number of pyramids
+        if self.x_coverage_start is not None and self.x_coverage_end is not None:
+            if self.num_pyramids != int((self.x_coverage_end - self.x_coverage_start)/base_width):
+                warnings.warn(f"The number of pyramids specified ({self.num_pyramids}) cannot fit in the x coverage range ({self.x_coverage_end - self.x_coverage_start}). Reducing the number of pyramids.")
+                # Round the next lower integer
+                self.num_pyramids = int((self.x_coverage_end - self.x_coverage_start)/base_width) + 1 
+                print(f"New number of pyramids: {self.num_pyramids}")
+            elif self.num_pyramids < 1:
+                raise ValueError("Number of pyramids must be at least 1.")
+            else:
+                self.num_pyramids = self.num_pyramids
+
+
         # Calculate x coverage area (for top/bottom)
         if self.x_coverage_start is None or self.x_coverage_end is None:
             coverage_factor = self.coverage_percent / 100.0
             # Calculate half the coverage width to center it
             half_coverage_x = (self.mpsat_sim.cell_size[0] * coverage_factor) / 2
             self.x_coverage_start = -half_coverage_x
-            self.x_coverage_end = half_coverage_x
+            self.x_coverage_end = half_coverage_x            
         else:
             self.x_coverage_start = self.x_coverage_start
             self.x_coverage_end = self.x_coverage_end
@@ -2043,6 +2061,8 @@ class PyramidalAbsorbers(object):
         
         return pyramids
     
+
+# ~ FOREBAFFLE CLASS
 class Forebaffle(object):
     '''
     Class defining a triangular forebaffle structure.

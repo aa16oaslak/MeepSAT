@@ -1,3 +1,61 @@
+import sys
+import os
+import site
+from pathlib import Path
+
+# First check for MEEPSAT_PATH environment variable (highest priority)
+meepsat_env_path = os.environ.get('MEEPSAT_PATH')
+if meepsat_env_path and os.path.exists(os.path.join(meepsat_env_path, 'meepsat')):
+    print(f"Using MEEPSAT from environment variable: {{meepsat_env_path}}")
+    main_dir = meepsat_env_path
+    meepsat_dir = os.path.join(main_dir, 'meepsat')
+    sys.path.append(main_dir)
+    sys.path.append(meepsat_dir)
+    meepsat_found = True
+else:
+    # Method 1: Try to import directly if MEEPSAT is installed properly
+    try:
+        import meepsat
+        print("MEEPSAT found in installed packages")
+        meepsat_dir = os.path.dirname(meepsat.__file__)
+        main_dir = os.path.dirname(meepsat_dir)
+        sys.path.append(meepsat_dir)  # Add meepsat directory to path for submodule imports
+        meepsat_found = True
+    except ImportError:
+        # Method 2: Try to find MEEPSAT in common locations
+        possible_paths = [
+            Path.cwd().parent,                     # Parent of current directory
+            Path.cwd(),                           # Current directory
+            Path(__file__).resolve().parent.parent,  # Parent of script directory
+            Path.home() / "Phd_work/MEEPSAT_WFH",      # User's home directory + common path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH'),   # HPC specific path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH')    # Another HPC specific path
+        ]
+        
+        meepsat_found = False
+        for path in possible_paths:
+            try:
+                meepsat_dir = path / "meepsat"
+                if meepsat_dir.exists():
+                    main_dir = str(path)
+                    meepsat_dir = str(meepsat_dir)
+                    sys.path.append(main_dir)
+                    sys.path.append(meepsat_dir)  # Critical: add meepsat directory for submodule imports
+                    print(f"MEEPSAT found at: {{meepsat_dir}}")
+                    meepsat_found = True
+                    break
+            except Exception as e:
+                print(f"Error checking path {{path}}: {{e}}")
+        
+        if not meepsat_found:
+            print("WARNING: MEEPSAT directory not found automatically.")
+            print("Please set the MEEPSAT_PATH environment variable before running.")
+            print("For example: export MEEPSAT_PATH=/path/to/MEEPSAT")
+            main_dir = "."
+            meepsat_dir = "./meepsat"
+            sys.path.append(main_dir)
+            sys.path.append(meepsat_dir)
+
 # ~ THE FUNCTIONS/CLASS SHOULD RETURN AN permittivity_map OR EPSILON MAP OF THE VARIOUS
 # ~ COMPONENTS OF THE SYSTEM; INITIALLY THE LENS CLASS, BUT LATER ON
 # ~ THE PRISM CLASS, THE BEAM SPLITTER CLASS, ETC. THE USER CAN THEN PROVIDE THIS
@@ -53,10 +111,16 @@ class AsphericLens(object):
                  name = None, 
                  x = 0., y = 0., 
                  n_refr = 1.52, 
+                 #! Single ARC parameters (useless- but not touching for now to avoid bugs)       
                  AR_left = None, 
                  AR_right = None,
                  AR_material = 1.52/4,
-                 # Adding stepped pyramid ARC here
+                 #! Parameters for multi-layer ARCs (single + multi-layer can be used simultaneously)
+                 AR_left_layers = None,
+                 AR_left_materials = None,
+                 AR_right_layers = None,
+                 AR_right_materials = None,
+                 #! Adding stepped pyramid ARC here
                  ARC_type = None,
                  step_ARC_nlayers = None,
                  step_ARC_pitch = None,
@@ -112,12 +176,33 @@ class AsphericLens(object):
             Index of refraction of the lens. 
             Set to HDPE by default.
             (default : 1.52) 
+
+    
+        #! Single ARC parameters (useless- but not touching for now to avoid bugs)       
         AR_left : float, optional
             Anti Reflection coating thickness of left surface of the lens
             (default : None) 
         AR_right : float, optional
             Anti Reflection coating thickness of right surface of the lens
             (default : None) 
+        AR_material : float, optional
+            Refractive index of the AR coating material
+
+        #! Parameters for multi-layer ARCs (single + multi-layer can be used simultaneously)
+        AR_left_layers : list, optional
+            List of thicknesses of each layer in the multi-layer ARC on the left surface
+            (default : None)
+        AR_left_materials : list, optional
+            List of refractive indices of each layer in the multi-layer ARC on the left surface
+            (default : None)
+        AR_right_layers : list, optional
+            List of thicknesses of each layer in the multi-layer ARC on the right surface
+            (default : None)
+        AR_right_materials : list, optional
+            List of refractive indices of each layer in the multi-layer ARC on the right surface
+            (default : None)
+
+
         #! stepped pyramid ARC parameters
         ARC_type : str, optional
             Type of ARC, either 'stepped_pyramid' or 'default' in the current version
@@ -200,10 +285,18 @@ class AsphericLens(object):
         self.x = x                      
         self.y = y                      
         self.eps = n_refr**2            
-        self.object_type = 'Lens'       
+        self.object_type = 'Lens'
+
+        #! Single ARC parameters (useless- but not touching for now to avoid bugs)       
         self.AR_left = AR_left          
         self.AR_right = AR_right        
         self.AR_material = AR_material #!material of the AR coating  
+
+        #! Parameters for multi-layer ARCs (single + multi-layer can be used simultaneously)
+        self.left_layers=AR_left_layers 
+        self.left_materials=AR_left_materials
+        self.right_layers=AR_right_layers 
+        self.right_materials=AR_right_materials
         
         #! stepped pyramid ARC parameters
         if ARC_type == 'stepped_pyramid':
@@ -701,6 +794,215 @@ class AsphericLens(object):
         plt.show()
         plt.close()
     
+    # def write_h5file(self, parallel=False, filename='epsilon_map'):
+    #     '''
+    #     Writes the file that will then be 
+    #     read within the MEEP simulation
+
+    #     Arguments
+    #     ---------
+    #     parallel : bool, optional
+    #         If the computation is run in parallel (default : False)
+    #     filename : str, optional
+    #         Name of the permittivity map file written. 
+    #         Needs to be the same name given to the MEEP simulation
+    #         (default : 'epsilon_map')
+    #     '''
+    #     self.mapname = filename
+    #     if parallel:
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         if not h5py.get_config().mpi:
+    #             raise ValueError("h5py was built without MPI support, can't use mpio driver")
+            
+    #         with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
+    #             size_x = len(self.permittivity_map[:, 0])
+    #             size_y = len(self.permittivity_map[0, :])
+    #             dset = h.create_dataset('eps', (size_x, size_y), dtype='float32')
+    #             dset[:, :] = self.permittivity_map
+    #     else:
+    #         with h5py.File(filename + '.h5', 'w') as h:
+    #             size_x = len(self.permittivity_map[:, 0])
+    #             size_y = len(self.permittivity_map[0, :])
+    #             dset = h.create_dataset('eps', (size_x, size_y), 
+    #                                     dtype='float32', 
+    #                                     compression='gzip')
+    #             dset[:, :] = self.permittivity_map
+
+    # def write_h5file(self, parallel=False, filename='epsilon_map'):
+    #     '''
+    #     Writes the file that will then be 
+    #     read within the MEEP simulation
+
+    #     Arguments
+    #     ---------
+    #     parallel : bool, optional
+    #         If the computation is run in parallel (default : False)
+    #     filename : str, optional
+    #         Name of the permittivity map file written. 
+    #         Needs to be the same name given to the MEEP simulation
+    #         (default : 'epsilon_map')
+    #     '''
+    #     self.mapname = filename
+        
+    #     if parallel:
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         rank = comm.Get_rank()
+            
+    #         if not h5py.get_config().mpi:
+    #             raise ValueError("h5py was built without MPI support, can't use mpio driver")
+            
+    #         with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
+    #             size_x = len(self.permittivity_map[:, 0])
+    #             size_y = len(self.permittivity_map[0, :])
+    #             dset = h.create_dataset('eps', (size_x, size_y), dtype='float32')
+                
+    #             # Use collective I/O - all processes must participate
+    #             with dset.collective:
+    #                 # Only rank 0 writes the data
+    #                 if rank == 0:
+    #                     dset[:, :] = self.permittivity_map.astype('float32')
+            
+    #         comm.barrier()
+    #     else:
+    #         with h5py.File(filename + '.h5', 'w') as h:
+    #             size_x = len(self.permittivity_map[:, 0])
+    #             size_y = len(self.permittivity_map[0, :])
+    #             dset = h.create_dataset('eps', (size_x, size_y), 
+    #                                     dtype='float32', 
+    #                                     compression='gzip')
+    #             dset[:, :] = self.permittivity_map
+
+    # def write_h5file(self, parallel=False, filename='epsilon_map'):
+    #     '''
+    #     Writes the file that will then be 
+    #     read within the MEEP simulation
+
+    #     Arguments
+    #     ---------
+    #     parallel : bool, optional
+    #         If the computation is run in parallel (default : False)
+    #     filename : str, optional
+    #         Name of the permittivity map file written. 
+    #         Needs to be the same name given to the MEEP simulation
+    #         (default : 'epsilon_map')
+    #     '''
+    #     self.mapname = filename
+        
+    #     # Check if permittivity_map is properly initialized
+    #     if self.permittivity_map is None:
+    #         raise ValueError("permittivity_map is None. Call assemble() before write_h5file()")
+        
+    #     # Make sure permittivity_map is a proper 2D array
+    #     try:
+    #         size_x = len(self.permittivity_map[:, 0])
+    #         size_y = len(self.permittivity_map[0, :])
+    #     except (IndexError, AttributeError, TypeError):
+    #         raise ValueError("permittivity_map has incorrect shape or type. Expected a 2D array.")
+        
+    #     if parallel:
+    #         try:
+    #             from mpi4py import MPI
+    #             comm = MPI.COMM_WORLD
+    #             rank = comm.Get_rank()
+    #             size = comm.Get_size()
+                
+    #             if not h5py.get_config().mpi:
+    #                 raise ValueError("h5py was built without MPI support, can't use mpio driver")
+                
+    #             print(f"Process {rank}/{size}: Creating HDF5 file with parallel I/O")
+                
+    #             # Create file with parallel access
+    #             with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
+    #                 # Create dataset
+    #                 dset = h.create_dataset('eps', (size_x, size_y), dtype='float32')
+                    
+    #                 # Use collective I/O for better compatibility with ROMIO drivers
+    #                 dset.write_direct(self.permittivity_map.astype('float32'))
+                    
+    #                 # Force synchronization to ensure all processes have written their data
+    #                 h.flush()
+                    
+    #             # Additional MPI barrier to ensure all processes complete writing
+    #             comm.barrier()
+    #             print(f"Process {rank}/{size}: HDF5 file written successfully")
+                
+    #         except Exception as e:
+    #             from mpi4py import MPI
+    #             rank = MPI.COMM_WORLD.Get_rank()
+    #             print(f"Process {rank}: Error in parallel write: {str(e)}")
+                
+    #             # Fallback to serial write on rank 0 only
+    #             if rank == 0:
+    #                 print("Falling back to serial write...")
+    #                 try:
+    #                     with h5py.File(filename + '.h5', 'w') as h:
+    #                         dset = h.create_dataset('eps', (size_x, size_y), 
+    #                                                 dtype='float32', 
+    #                                                 compression='gzip')
+    #                         dset[:, :] = self.permittivity_map
+    #                     print("Serial fallback write successful")
+    #                 except Exception as fallback_error:
+    #                     print(f"Serial fallback also failed: {str(fallback_error)}")
+    #                     raise
+                
+    #             # Ensure all processes wait for rank 0 to complete
+    #             MPI.COMM_WORLD.barrier()
+                
+    #     else:
+    #         try:
+    #             with h5py.File(filename + '.h5', 'w') as h:
+    #                 dset = h.create_dataset('eps', (size_x, size_y), 
+    #                                         dtype='float32', 
+    #                                         compression='gzip')
+    #                 dset[:, :] = self.permittivity_map
+    #             print(f"HDF5 file written successfully in serial mode")
+    #         except Exception as e:
+    #             print(f"Error in serial write: {str(e)}")
+    #             raise
+
+    #! def write_h5file(self, parallel=False, filename='epsilon_map'):
+    #     '''
+    #     Writes the file that will then be 
+    #     read within the MEEP simulation
+
+    #     Arguments
+    #     ---------
+    #     parallel : bool, optional
+    #         If the computation is run in parallel (default : False)
+    #     filename : str, optional
+    #         Name of the permittivity map file written. 
+    #         Needs to be the same name given to the MEEP simulation
+    #         (default : 'epsilon_map')
+    #     '''
+    #     self.mapname = filename
+        
+    #     if parallel:
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         rank = comm.Get_rank()
+            
+    #         # Only rank 0 writes the file
+    #         if rank == 0:
+    #             with h5py.File(filename + '.h5', 'w') as h:
+    #                 size_x = len(self.permittivity_map[:, 0])
+    #                 size_y = len(self.permittivity_map[0, :])
+    #                 dset = h.create_dataset('eps', (size_x, size_y), 
+    #                                         dtype='float32')
+    #                 dset[:, :] = self.permittivity_map.astype('float32')
+            
+    #         # Wait for rank 0 to finish writing
+    #         comm.barrier()
+    #     else:
+    #         with h5py.File(filename + '.h5', 'w') as h:
+    #             size_x = len(self.permittivity_map[:, 0])
+    #             size_y = len(self.permittivity_map[0, :])
+    #             dset = h.create_dataset('eps', (size_x, size_y), 
+    #                                     dtype='float32', 
+    #                                     compression='gzip')
+    #             dset[:, :] = self.permittivity_map
+
     def write_h5file(self, parallel=False, filename='epsilon_map'):
         '''
         Writes the file that will then be 
@@ -715,26 +1017,66 @@ class AsphericLens(object):
             Needs to be the same name given to the MEEP simulation
             (default : 'epsilon_map')
         '''
+        import os
+        
+        # Store the full path
         self.mapname = filename
+        full_path = filename + '.h5'
+        
         if parallel:
             from mpi4py import MPI
             comm = MPI.COMM_WORLD
-            if not h5py.get_config().mpi:
-                raise ValueError("h5py was built without MPI support, can't use mpio driver")
+            rank = comm.Get_rank()
             
-            with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
-                size_x = len(self.permittivity_map[:, 0])
-                size_y = len(self.permittivity_map[0, :])
-                dset = h.create_dataset('eps', (size_x, size_y), dtype='float32')
-                dset[:, :] = self.permittivity_map
+            # Only rank 0 writes the file
+            if rank == 0:
+                # Ensure directory exists
+                file_dir = os.path.dirname(full_path) if os.path.dirname(full_path) else '.'
+                os.makedirs(file_dir, exist_ok=True)
+                
+                # Remove old file if it exists
+                if os.path.exists(full_path):
+                    os.remove(full_path)
+                
+                with h5py.File(full_path, 'w') as h:
+                    size_x = len(self.permittivity_map[:, 0])
+                    size_y = len(self.permittivity_map[0, :])
+                    dset = h.create_dataset('eps', (size_x, size_y), 
+                                            dtype='float32')
+                    dset[:, :] = self.permittivity_map.astype('float32')
+                    h.flush()  # Ensure data is written to disk
+                
+                print(f"Rank 0: HDF5 file written to {os.path.abspath(full_path)}")
+            
+            # Wait for rank 0 to finish writing
+            comm.barrier()
+            
+            # All ranks verify the file exists
+            if not os.path.exists(full_path):
+                raise FileNotFoundError(f"HDF5 file not found at {os.path.abspath(full_path)}")
+            
+            # Additional barrier to ensure file system sync
+            comm.barrier()            
+
         else:
-            with h5py.File(filename + '.h5', 'w') as h:
+            # Ensure directory exists
+            file_dir = os.path.dirname(full_path) if os.path.dirname(full_path) else '.'
+            os.makedirs(file_dir, exist_ok=True)
+            
+            # Remove old file if it exists
+            if os.path.exists(full_path):
+                os.remove(full_path)
+            
+            with h5py.File(full_path, 'w') as h:
                 size_x = len(self.permittivity_map[:, 0])
                 size_y = len(self.permittivity_map[0, :])
                 dset = h.create_dataset('eps', (size_x, size_y), 
                                         dtype='float32', 
                                         compression='gzip')
                 dset[:, :] = self.permittivity_map
+                h.flush()  # Ensure data is written to disk
+            
+            print(f"HDF5 file written to {os.path.abspath(full_path)}")
 
 
     def write_lens_nARC(self, comp, eps_map, res, 
@@ -911,9 +1253,7 @@ class AsphericLens(object):
                     start_pos_pos += AR_thick
 
     # Example usage:
-    def assemble_with_multi_arc(self, 
-                            left_layers=None, left_materials=None,
-                            right_layers=None, right_materials=None):
+    def assemble_with_multi_arc(self):
         """
         Assembling the lens object with multi-layer AR coatings
         
@@ -928,10 +1268,10 @@ class AsphericLens(object):
             Permittivity values for each AR coating layer on the right surface
         """
         self.write_lens_nARC(self, self.permittivity_map, self.res,
-                        AR_left_layers=left_layers,
-                        AR_left_materials=left_materials,
-                        AR_right_layers=right_layers,
-                        AR_right_materials=right_materials)
+                        AR_left_layers=self.left_layers,
+                        AR_left_materials=self.left_materials,
+                        AR_right_layers=self.right_layers,
+                        AR_right_materials=self.right_materials)
         return self.permittivity_map
     
     # # Example usage:

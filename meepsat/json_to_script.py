@@ -61,8 +61,8 @@ else:
             Path.cwd(),                           # Current directory
             Path(__file__).resolve().parent.parent,  # Parent of script directory
             Path.home() / "Phd_work/MEEPSAT_WFH",      # User's home directory + common path
-            Path('/home/ashesh_ak/Phd_work/MEEPSAT_WFH'),   # HPC specific path
-            Path('/home/ashesh_ak/Phd_work/MEEPSAT_WFH')    # Another HPC specific path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH'),   # HPC specific path
+            Path('/cfs/data/asab1238/MEEPSAT_WFH')    # Another HPC specific path
         ]
         
         meepsat_found = False
@@ -88,6 +88,7 @@ else:
             meepsat_dir = "./meepsat"
             sys.path.append(main_dir)
             sys.path.append(meepsat_dir)
+
 
 # Handle savepath - use JSON path if provided, otherwise create default
 """
@@ -259,10 +260,10 @@ def init_epsilon_map(data):
     script= f"""
 #~ Adding Epsilon Map
 size_x, size_y, size_z = mpsat_sim.cell_size[0], mpsat_sim.cell_size[1], mpsat_sim.cell_size[2]
-res = mpsat_sim.resolution
+res = int(mpsat_sim.resolution)  # Ensure resolution is an integer
 # Create the epsilon map: total size of the simulation cell in all the axis multiplied by the resolution + 1
-epsilon_map = np.ones(((size_x + mpsat_sim.factor_dpml*mpsat_sim.dpml)*res+1, 
-                            (size_y + mpsat_sim.factor_dpml*mpsat_sim.dpml)*res+1), dtype = 'float32')
+epsilon_map = np.ones((int((size_x)*res+1), 
+                       int((size_y)*res+1)), dtype = 'float32')
 """
     return script
 
@@ -391,6 +392,10 @@ def add_lens(data):
                                 AR_left= {params.get('AR_left', 'None')},
                                 AR_right= {params.get('AR_right', 'None')},
                                 AR_material= {params.get('AR_material', 'None')},
+                                AR_left_layers={params.get('AR_left_layers', 'None')},
+                                AR_left_materials={params.get('AR_left_materials', 'None')},
+                                AR_right_layers={params.get('AR_right_layers', 'None')},
+                                AR_right_materials={params.get('AR_right_materials', 'None')},
                                 ARC_type= {params.get('ARC_type', "'default'")},
                                 step_ARC_nlayers= {params.get('step_ARC_nlayers', 'None')},
                                 step_ARC_pitch= {params.get('step_ARC_pitch', 'None')},
@@ -408,12 +413,7 @@ def add_lens(data):
             if has_multi_arc:
                 script += f"""
 # Using multi-layer AR coating assembly
-{lens} = {lens}_init.assemble_with_multi_arc(
-    left_layers={params.get('AR_left_layers', 'None')},
-    left_materials={params.get('AR_left_materials', 'None')},
-    right_layers={params.get('AR_right_layers', 'None')},
-    right_materials={params.get('AR_right_materials', 'None')}
-)
+{lens} = {lens}_init.assemble_with_multi_arc()
 """
             elif has_stepped_pyramid_arc:
                 script += f"""
@@ -546,6 +546,90 @@ def add_slab(data):
 )
 {slab_name}_obj = {slab_name}_init.assemble()
 mpsat_sim.add_meep_geometry({slab_name}_obj)
+"""
+        return script
+
+#^====================================================================================================================^#
+def add_absorbers(data):
+    """
+    Create code for adding absorbers defined in the JSON file
+    
+    Parameters
+    ----------
+    data : dict
+        JSON data containing absorber definitions
+        
+    Returns
+    -------
+    script : str
+        Python script code for creating absorbers
+    """
+    script = ""
+    
+    # Check if absorbers are present in the data
+    if "absorbers" not in data:
+        return script  # Empty string since absorbers are not mandatory
+    else:
+        print("Absorber found in the JSON data")
+        script += "\n#~ Adding Absorbers\n"
+        
+        for absorber_name, absorber_data in data["absorbers"].items():
+            # Build a dictionary of parameters with appropriate conversions
+            params = {}
+            for key, value in absorber_data.items():
+                params[key] = convert_string_to_object_reference(value, key)
+
+            # Deal with special absorber parameters if needed
+            #!) freq
+            if "freq" in absorber_data:
+                print(f"Absorber frequency found: {absorber_data['freq']}")
+                params["freq"] = convert_string_to_object_reference(absorber_data["freq"], "freq")
+            else:
+                print(f"No frequency specified for absorber, using the current source frequency: {data['sources']['source1']['frequecy']}")
+                params["freq"] = data["sources"]["source1"]["frequecy"]
+
+            
+            script += f"""
+# Absorber: {absorber_name}
+{absorber_name}_init = comp_meep.PyramidalAbsorbers(
+    mpsat_sim=mpsat_sim,
+    base_width={params.get('base_width', 'None')},
+    top_width={params.get('top_width', 0)},
+    height={params.get('height', 'None')},
+    layer_thickness={params.get('layer_thickness', 'None')},
+    num_pyramids={params.get('num_pyramids', 20)},
+    n_layers={params.get('n_layers', 10)},
+    material={params.get('material', 'None')},
+    epsilon_real={params.get('epsilon_real', 2.5)},
+    epsilon_imag={params.get('epsilon_imag', 0)},
+    freq={params.get('freq', '1/3')},
+    x_coverage_start={params.get('x_coverage_start', 'None')},
+    x_coverage_end={params.get('x_coverage_end', 'None')},
+    y_coverage_start={params.get('y_coverage_start', 'None')},
+    y_coverage_end={params.get('y_coverage_end', 'None')},
+    coverage_percent={params.get('coverage_percent', 40)},
+    edges={params.get('edges', '["top", "bottom"]')},
+    x_left_offset={params.get('x_left_offset', 0)},
+    x_right_offset={params.get('x_right_offset', 0)},
+    y_top_offset={params.get('y_top_offset', 0)},
+    y_bottom_offset={params.get('y_bottom_offset', 0)},
+    add_substrate={params.get('add_substrate', 'True')},
+    substrate_thickness={params.get('substrate_thickness', 'None')},
+    substrate_material={params.get('substrate_material', 'None')},
+    substrate_epsilon_real={params.get('substrate_epsilon_real', 'None')},
+    substrate_epsilon_imag={params.get('substrate_epsilon_imag', 'None')},
+    substrate_extends_beyond_pyramids={params.get('substrate_extends_beyond_pyramids', 'True')},
+    substrate_extension={params.get('substrate_extension', 0.5)},
+    add_pec_backing={params.get('add_pec_backing', 'False')},
+    pec_thickness={params.get('pec_thickness', 'None')},
+    pec_extends_beyond_substrate={params.get('pec_extends_beyond_substrate', 'True')},
+    pec_extension={params.get('pec_extension', 0)},
+    name={params.get('name', 'None')}
+)
+
+{absorber_name}_blocks = {absorber_name}_init.assemble()
+# Add all absorber blocks to the MEEP geometry
+mpsat_sim.meep_geometry.extend({absorber_name}_blocks)
 """
         return script
 
