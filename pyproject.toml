@@ -25,7 +25,8 @@ dependencies = [
     "matplotlib",
     "scipy",
     "pandas",
-    "h5py"
+    "h5py",
+    "memory-profiler"
 ]
 
 [project.urls]

@@ -2,6 +2,8 @@ import sys
 import os
 import site
 from pathlib import Path
+from memory_profiler import profile
+
 
 # First check for MEEPSAT_PATH environment variable (highest priority)
 meepsat_env_path = os.environ.get('MEEPSAT_PATH')
@@ -62,7 +64,7 @@ import meep as mp
 import h5py
 import scipy.optimize as sc
 
-
+@profile
 def get_MEEP_ff(simulation,
                 ff_distance = None,
                 ff_angle = None,
@@ -199,6 +201,171 @@ def get_MEEP_ff(simulation,
 
     return angles, ffmeep
 
+
+# @profile
+# def get_complex_field(sim,
+#                         simres,
+#                         aper_size,
+#                         aper_pos_x,
+#                         wvl,
+#                         plot_amp = False, 
+#                         saveh5 = False, 
+#                         filename = 'test',
+#                         parallel = False):
+#         '''
+#         Gets the electric field in its complex form at the aperture.
+#         To that end, fits the time evolution of the field there.
+
+#         Arguments
+#         ---------
+#         plot_amp : bool, optional
+#             Whether to plot the amplitude of field at aperture. 
+#             (default : False)
+#         saveh5 : bool, optional
+#             Whether to save the amplitude in an h5 file. (default : False)
+#         filename : str, optional
+#             Name of the plot to be saved
+#         parallel : bool, optional
+#             Whether the code is running in parallel
+
+#         Returns
+#         -------
+#         amplitude*phase : complex array
+#             Complex electric field at the aperture
+
+#         '''
+
+#         #Setting the timestep to a very low value, 
+#         #so that MEEP uses its lowest timestep
+#         timestep = .3
+
+#         #120 steps Is roughly enough to give a 
+#         #few periods for wavelengths from 1 to 10 mm
+#         #Can be tweaked to save on sim time.
+#         n_iter = 120
+
+#         res = simres
+#         AP_size = aper_size
+#         aper_pos_x = aper_pos_x
+        
+#         #Get the real field at aperture
+#         efield = sim.get_array(center=mp.Vector3(aper_pos_x, 0), 
+#                                     size=mp.Vector3(0, AP_size), 
+#                                     component=mp.Ez)
+
+        
+
+#         #Initializes the list containing the E field evolution
+#         e_field_evol = np.ones((n_iter, len(efield)))
+#         e_field_evol[0] = efield
+
+#         #List to get the precise timestepping done by meep
+#         time = np.zeros(n_iter)
+#         time[0] = sim.meep_time()
+
+#         ### Stacking the electric field evolution on the aperture
+#         for k in range(n_iter):
+#             sim.run(until = timestep)
+#             time[k] = sim.meep_time()
+#             e_field_evol[k] = sim.get_array(center=mp.Vector3(aper_pos_x, 0), 
+#                                          size=mp.Vector3(0, AP_size), 
+#                                          component=mp.Ez)
+        
+#         #Each point on the aperture is fit for a cosine with amplitude and phase
+#         def f(x, amp, phase):
+#             return amp*np.cos(x*2*np.pi/wvl + phase)
+
+#         #Initialize the lists of amplitude and phase over the aperture
+#         amplitude = np.zeros(int(AP_size*res))
+#         phase = np.zeros(int(AP_size*res))
+
+#         #The field is only taken on the opening of the aperture
+
+#         #Fits amplitude and phase for each point
+#         for k in range(int(AP_size*res)):
+#             popt, pcov = sc.curve_fit(f, time, e_field_evol[:,k])
+#             amplitude[k] = popt[0]
+#             phase[k] = popt[1]
+        
+
+#         y = np.linspace(-AP_size/2,AP_size/2,len(amplitude))
+#         ### Plot
+#         if plot_amp :
+#             norm = np.max(np.abs(amplitude))
+#             amp = 10*np.log10(np.abs(amplitude)/norm)
+#             plt.figure()
+#             plt.plot(y, amp) 
+#             plt.ylim((-60,0))
+#             plt.xlim((0, AP_size/2))
+#             plt.title('E field amplitude on aperture')
+#             plt.xlabel('y (mm)')
+#             plt.ylabel('$Amplitude [dB]$')
+#             plt.savefig(filename + '.png')
+#             plt.close()
+
+#         # if saveh5 : 
+#         #     if parallel :
+#         #         from mpi4py import MPI
+#         #         comm = MPI.COMM_WORLD
+#         #         rank = comm.Get_rank()
+                
+#         #         if not h5py.get_config().mpi:
+#         #             raise ValueError("h5py was built without MPI support, can't use mpio driver")
+                
+#         #         try:
+#         #             with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
+#         #                 h.create_dataset('y', data=y, dtype='float64')
+#         #                 h.create_dataset('amplitude', data=amplitude, dtype='float64')
+#         #                 h.create_dataset('phase', data=phase, dtype='float64')
+#         #         except OSError as e:
+#         #             # Fallback to serial writing from rank 0 if MPI file creation fails
+#         #             if rank == 0:
+#         #                 print(f"MPI file creation failed: {e}")
+#         #                 print("Falling back to serial file writing...")
+#         #                 with h5py.File(filename + '.h5', 'w') as h:
+#         #                     h.create_dataset('y', data=y, dtype='float64', compression='gzip')
+#         #                     h.create_dataset('amplitude', data=amplitude, dtype='float64', compression='gzip')
+#         #                     h.create_dataset('phase', data=phase, dtype='float64', compression='gzip')
+#         #             comm.barrier()  # Ensure all processes wait for file creation
+#         #     else: 
+#         #         with h5py.File(filename + '.h5', 'w') as h:
+#         #             h.create_dataset('y', data=y, dtype='float64', compression='gzip')
+#         #             h.create_dataset('amplitude', data=amplitude, dtype='float64', compression='gzip')
+#         #             h.create_dataset('phase', data=phase, dtype='float64', compression='gzip')
+        
+#         # return amplitude*np.exp(1j*phase)
+
+#         # if saveh5:
+#         #     if parallel:
+#         #         from mpi4py import MPI
+#         #         comm = MPI.COMM_WORLD
+#         #         rank = comm.Get_rank()
+                
+#         #         if rank == 0:
+#         #             np.savez_compressed(filename + '.npz',
+#         #                             y=y,
+#         #                             amplitude=amplitude,
+#         #                             phase=phase)
+#         #             print(f"Complex field data saved to {filename}.npz")
+#         #         comm.barrier()
+#         #     else:
+#         #         np.savez_compressed(filename + '.npz',
+#         #                         y=y,
+#         #                         amplitude=amplitude,
+#         #                         phase=phase)
+#         #         print(f"Complex field data saved to {filename}.npz")
+
+#         if saveh5:
+#             np.savez_compressed(filename + '.npz',
+#                                 y=y,
+#                                 amplitude=amplitude,
+#                                 phase=phase)
+#             print(f"Complex field data saved to {filename}.npz")
+        
+#         return amplitude*np.exp(1j*phase)
+
+
+@profile
 def get_complex_field(sim,
                         simres,
                         aper_size,
@@ -208,157 +375,112 @@ def get_complex_field(sim,
                         saveh5 = False, 
                         filename = 'test',
                         parallel = False):
-        '''
-        Gets the electric field in its complex form at the aperture.
-        To that end, fits the time evolution of the field there.
-
-        Arguments
-        ---------
-        plot_amp : bool, optional
-            Whether to plot the amplitude of field at aperture. 
-            (default : False)
-        saveh5 : bool, optional
-            Whether to save the amplitude in an h5 file. (default : False)
-        filename : str, optional
-            Name of the plot to be saved
-        parallel : bool, optional
-            Whether the code is running in parallel
-
-        Returns
-        -------
-        amplitude*phase : complex array
-            Complex electric field at the aperture
-
-        '''
-
-        #Setting the timestep to a very low value, 
-        #so that MEEP uses its lowest timestep
-        timestep = .3
-
-        #120 steps Is roughly enough to give a 
-        #few periods for wavelengths from 1 to 10 mm
-        #Can be tweaked to save on sim time.
-        n_iter = 120
-
-        res = simres
-        AP_size = aper_size
-        aper_pos_x = aper_pos_x
-        
-        #Get the real field at aperture
-        efield = sim.get_array(center=mp.Vector3(aper_pos_x, 0), 
-                                    size=mp.Vector3(0, AP_size), 
-                                    component=mp.Ez)
-
-        
-
-        #Initializes the list containing the E field evolution
-        e_field_evol = np.ones((n_iter, len(efield)))
+    '''
+    Gets the electric field in its complex form at the aperture.
+    Uses memory-mapped files to minimize RAM usage during field collection.
+    '''
+    
+    import gc
+    import tempfile
+    import os
+    
+    timestep = .3
+    n_iter = 60
+    res = simres
+    AP_size = aper_size
+    
+    # Get initial field to determine size
+    efield = sim.get_array(center=mp.Vector3(aper_pos_x, 0), 
+                                size=mp.Vector3(0, AP_size), 
+                                component=mp.Ez)
+    
+    n_points = len(efield)
+    
+    # Create temporary file for memory-mapped array (deleted automatically)
+    temp_dir = tempfile.mkdtemp()
+    temp_file = os.path.join(temp_dir, 'e_field_evol.dat')
+    
+    try:
+        # Create memory-mapped array on disk instead of RAM
+        e_field_evol = np.memmap(temp_file, dtype='float32', mode='w+', 
+                                  shape=(n_iter, n_points))
         e_field_evol[0] = efield
-
-        #List to get the precise timestepping done by meep
-        time = np.zeros(n_iter)
+        
+        time = np.zeros(n_iter, dtype=np.float32)
         time[0] = sim.meep_time()
-
-        ### Stacking the electric field evolution on the aperture
-        for k in range(n_iter):
+        
+        # Stack the electric field evolution (writes to disk, not RAM)
+        for k in range(1, n_iter):
             sim.run(until = timestep)
             time[k] = sim.meep_time()
             e_field_evol[k] = sim.get_array(center=mp.Vector3(aper_pos_x, 0), 
                                          size=mp.Vector3(0, AP_size), 
                                          component=mp.Ez)
+            # Flush to disk periodically to avoid RAM buildup
+            if k % 10 == 0:
+                e_field_evol.flush()
         
-        #Each point on the aperture is fit for a cosine with amplitude and phase
+        # Cosine fitting function
         def f(x, amp, phase):
             return amp*np.cos(x*2*np.pi/wvl + phase)
-
-        #Initialize the lists of amplitude and phase over the aperture
-        amplitude = np.zeros(int(AP_size*res))
-        phase = np.zeros(int(AP_size*res))
-
-        #The field is only taken on the opening of the aperture
-
-        #Fits amplitude and phase for each point
-        for k in range(int(AP_size*res)):
-            popt, pcov = sc.curve_fit(f, time, e_field_evol[:,k])
-            amplitude[k] = popt[0]
-            phase[k] = popt[1]
         
-
-        y = np.linspace(-AP_size/2,AP_size/2,len(amplitude))
-        ### Plot
-        if plot_amp :
-            norm = np.max(np.abs(amplitude))
-            amp = 10*np.log10(np.abs(amplitude)/norm)
-            plt.figure()
-            plt.plot(y, amp) 
-            plt.ylim((-60,0))
-            plt.xlim((0, AP_size/2))
-            plt.title('E field amplitude on aperture')
-            plt.xlabel('y (mm)')
-            plt.ylabel('$Amplitude [dB]$')
-            plt.savefig(filename + '.png')
-            plt.close()
-
-        # if saveh5 : 
-        #     if parallel :
-        #         from mpi4py import MPI
-        #         comm = MPI.COMM_WORLD
-        #         rank = comm.Get_rank()
-                
-        #         if not h5py.get_config().mpi:
-        #             raise ValueError("h5py was built without MPI support, can't use mpio driver")
-                
-        #         try:
-        #             with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
-        #                 h.create_dataset('y', data=y, dtype='float64')
-        #                 h.create_dataset('amplitude', data=amplitude, dtype='float64')
-        #                 h.create_dataset('phase', data=phase, dtype='float64')
-        #         except OSError as e:
-        #             # Fallback to serial writing from rank 0 if MPI file creation fails
-        #             if rank == 0:
-        #                 print(f"MPI file creation failed: {e}")
-        #                 print("Falling back to serial file writing...")
-        #                 with h5py.File(filename + '.h5', 'w') as h:
-        #                     h.create_dataset('y', data=y, dtype='float64', compression='gzip')
-        #                     h.create_dataset('amplitude', data=amplitude, dtype='float64', compression='gzip')
-        #                     h.create_dataset('phase', data=phase, dtype='float64', compression='gzip')
-        #             comm.barrier()  # Ensure all processes wait for file creation
-        #     else: 
-        #         with h5py.File(filename + '.h5', 'w') as h:
-        #             h.create_dataset('y', data=y, dtype='float64', compression='gzip')
-        #             h.create_dataset('amplitude', data=amplitude, dtype='float64', compression='gzip')
-        #             h.create_dataset('phase', data=phase, dtype='float64', compression='gzip')
+        # Initialize amplitude and phase arrays
+        amplitude = np.zeros(n_points, dtype=np.float32)
+        phase = np.zeros(n_points, dtype=np.float32)
         
-        # return amplitude*np.exp(1j*phase)
-
-        # if saveh5:
-        #     if parallel:
-        #         from mpi4py import MPI
-        #         comm = MPI.COMM_WORLD
-        #         rank = comm.Get_rank()
-                
-        #         if rank == 0:
-        #             np.savez_compressed(filename + '.npz',
-        #                             y=y,
-        #                             amplitude=amplitude,
-        #                             phase=phase)
-        #             print(f"Complex field data saved to {filename}.npz")
-        #         comm.barrier()
-        #     else:
-        #         np.savez_compressed(filename + '.npz',
-        #                         y=y,
-        #                         amplitude=amplitude,
-        #                         phase=phase)
-        #         print(f"Complex field data saved to {filename}.npz")
-
-        if saveh5:
-            np.savez_compressed(filename + '.npz',
-                                y=y,
-                                amplitude=amplitude,
-                                phase=phase)
-            print(f"Complex field data saved to {filename}.npz")
+        # Fit amplitude and phase for each point
+        # Data is loaded from disk only when accessed
+        for k in range(n_points):
+            try:
+                popt, _ = sc.curve_fit(f, time, e_field_evol[:, k])
+                amplitude[k] = popt[0]
+                phase[k] = popt[1]
+            except RuntimeError:
+                amplitude[k] = 0
+                phase[k] = 0
         
-        return amplitude*np.exp(1j*phase)
+        # Explicitly delete memory-mapped array
+        del e_field_evol
+        del time
+        gc.collect()
+        
+    finally:
+        # Clean up temporary file
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+        if os.path.exists(temp_dir):
+            os.rmdir(temp_dir)
+    
+    y = np.linspace(-AP_size/2, AP_size/2, n_points, dtype=np.float32)
+    
+    # Plot if requested
+    if plot_amp:
+        norm = np.max(np.abs(amplitude))
+        amp = 10*np.log10(np.abs(amplitude)/norm)
+        plt.figure()
+        plt.plot(y, amp) 
+        plt.ylim((-60, 0))
+        plt.xlim((0, AP_size/2))
+        plt.title('E field amplitude on aperture')
+        plt.xlabel('y (mm)')
+        plt.ylabel('$Amplitude [dB]$')
+        plt.savefig(filename + '.png')
+        plt.close()
+    
+    # Save to file if requested
+    if saveh5:
+        np.savez_compressed(filename + '.npz',
+                            y=y,
+                            amplitude=amplitude,
+                            phase=phase)
+        print(f"Complex field data saved to {filename}.npz")
+    
+    # Create result and clean up
+    result = amplitude * np.exp(1j * phase)
+    del amplitude, phase, y
+    gc.collect()
+    
+    return result
 
 
 
@@ -1482,12 +1604,18 @@ def summary_plots(
     print("Shape of MEEPSAT far field angle array:", angle_array_meepsat.shape)
     print("Shape of MEEPSAT far field power dB array:", power_dB_array_meepsat.shape)
 
-    #! Plot 1: Magnitude slice comparison
+    #! Plot 1: Aperture Magnitude slice comparison
     plt.figure(figsize=(10, 6))
 
     # Plot for MEEPSAT
     plt.plot(y_meep, 10 * np.log10(aperture_slice_avg / norm_factor), 
              'b-', label='MeepSAT Time AvG', linewidth=2)
+    
+    # Saving the aperture slice avg as a npz file
+    np.savez_compressed(f'{plot_path}/meepsat_aperture_slice_avg_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.npz',
+                        y_coords = y_meep,
+                        aperture_slice_avg_dB = 10 * np.log10(aperture_slice_avg / norm_factor)
+                        )
 
     # Plot for GRASP if provided
     if comparision_GRASP_data is not None:
@@ -1821,6 +1949,15 @@ def summary_plots(
         ax1.set_title(f'Time Averaged E-field Magnitude**2 ({frequency_label})')
         ax1.grid()
         plt.colorbar(im1, ax=ax1, label='Power (dB)')
+
+        # Save the array data as npz for future verification
+        np.savez_compressed(f'{plot_path}/efield_magnitude_timeavg_2D_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.npz', 
+                            ez_magnitude_avg = ez_magnitude_avg,
+                            ez_magnitude_avg_linear = np.abs(ez_magnitude_avg)**2 / norm_factor,
+                            ez_power_avg_dB=10 * np.log10(np.abs(ez_magnitude_avg)**2 / norm_factor),
+                            x_coords=x_coords,
+                            y_coords=y_coords)
+
         
         # Last timestep
         im2 = ax2.imshow(
@@ -1857,6 +1994,12 @@ def summary_plots(
         ax1.set_title(f'Time Averaged E-field Phase ({frequency_label})')
         ax1.grid()
         plt.colorbar(im1, ax=ax1, label='Phase (degrees)')
+
+        # Save the array data as npz for future verification
+        np.savez_compressed(f'{plot_path}/efield_phase_timeavg_2D_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.npz', 
+                            ez_phase_avg_degrees=ez_phase_avg_degrees,
+                            x_coords=x_coords,
+                            y_coords=y_coords)
         
         # Last timestep
         im2 = ax2.imshow(
@@ -1893,6 +2036,14 @@ def summary_plots(
         ax1.set_title(f'Time Averaged Poynting Vector Magnitude ({frequency_label})')
         ax1.grid()
         plt.colorbar(im1, ax=ax1, label='Power (dB)')   
+
+        # Save the array data as npz for future verification
+        np.savez_compressed(f'{plot_path}/poynting_vector_magnitude_timeavg_2D_{frequency_label.replace(" ", "_").replace("/", "-")}_{savename_suffix}.npz', 
+                            poynting_vector_value_linear = averaged_poynting_vector,
+                            poynting_vector_magnitude_avg_linear = averaged_poynting_vector / norm_factor,
+                            poynting_vector_magnitude_avg_dB=10 * np.log10(averaged_poynting_vector / norm_factor),
+                            x_coords=x_coords,
+                            y_coords=y_coords)
 
         # Last timestep
         im2 = ax2.imshow(

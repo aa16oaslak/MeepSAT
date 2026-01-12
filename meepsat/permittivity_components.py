@@ -85,7 +85,7 @@ import math
 import matplotlib.pyplot as plt
 from matplotlib import rc
 
-import meepsat.extra_functions as exf
+import meepsat.helpers as exf
 
 # ! THE FOLLOWING SEGMENT OF THE CODE WAS TAKEN FROM THE MEEPART CODE
 # ! AND ADAPTED TO THE NEW STRUCTURE OF THE CODE IN THE MEEPSAT PACKAGE

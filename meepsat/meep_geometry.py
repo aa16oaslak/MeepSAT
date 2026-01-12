@@ -79,7 +79,7 @@ import matplotlib.pyplot as plt
 from matplotlib import rc
 
 # Extra functions
-import meepsat.extra_functions as exf
+import meepsat.helpers as exf
 
 # * ############################################################################################################
 # * ############################################################################################################

@@ -2,6 +2,7 @@ import sys
 import os
 import site
 from pathlib import Path
+from memory_profiler import profile
 
 # First check for MEEPSAT_PATH environment variable (highest priority)
 meepsat_env_path = os.environ.get('MEEPSAT_PATH')
@@ -68,7 +69,7 @@ import os
 from matplotlib.colors import LinearSegmentedColormap, LogNorm
 from matplotlib import animation
 from typing import Callable, Union, Any, Tuple, List, Optional
-import meepsat.extra_functions as exf
+import meepsat.helpers as exf
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib
 import matplotlib.colors as colors
@@ -206,19 +207,26 @@ def _cbar_label_(ax, cbar, label=None, pad=0.5):
 class Animate2DArray:
     
     def __init__(self, 
-                 fps):
+                fps,
+                use_disk_cache=True,  # NEW: option to use disk instead of memory
+                temp_dir=None):       # NEW: custom temp directory
         
         self.fps = fps
-        self._saved_frames = []  # Instance variable to store frames for this animation object
-
-    def plot_xy(x, y, title=None, xlabel=None, ylabel=None, elapsed=None):
-        """
-        Plot x and y values.
-        """
-        fig, ax = plt.subplots()
-        ax.plot(x, y)
-        label_plot(ax, title, xlabel, ylabel, elapsed)
-        plt.show()
+        self._saved_frames = []  # Keep for backward compatibility
+        self.use_disk_cache = use_disk_cache
+        self.frame_count = 0
+        
+        # Create temporary directory for disk caching
+        if use_disk_cache:
+            import tempfile
+            if temp_dir is None:
+                self.temp_dir = tempfile.mkdtemp(prefix='meep_anim_')
+            else:
+                self.temp_dir = temp_dir
+                os.makedirs(self.temp_dir, exist_ok=True)
+            print(f"Using disk cache for frames at: {self.temp_dir}")
+        else:
+            self.temp_dir = None
 
     # Add all your plotting functions here:
     def plot_2d_array(self, 
@@ -300,7 +308,7 @@ class Animate2DArray:
             ax.set_yticklabels(y_tick_labels)
 
         # Don't show the plot, but capture the figure as a png.
-        plt.close(fig)
+        # plt.close(fig)
 
         # Capture figure as a png, but store the png in memory
         # to avoid writing to disk.
@@ -406,7 +414,7 @@ class Animate2DArray:
                 elapsed=0,
                 frame_format='png'):
         """
-        Captures the current frame of the given figure and saves it to memory.
+        Captures the current frame and saves to disk or memory.
         """
         from io import BytesIO
 
@@ -414,23 +422,40 @@ class Animate2DArray:
             print("WARNING: No figure provided to grab_frame")
             return
         
-        bin_data = BytesIO()
-        try:
-            fig.savefig(bin_data, format=frame_format, bbox_inches='tight', 
-                    facecolor=fig.get_facecolor(), edgecolor='none')
-            frame_data = bin_data.getvalue()
-            
-            if len(frame_data) == 0:
-                print(f"WARNING: Empty frame data at timestep {elapsed}")
-                return
-            
-            self._saved_frames.append(frame_data)
-            print(f'PNG added to bindata for timestep: {elapsed} (size: {len(frame_data)} bytes)')
-            
-        except Exception as e:
-            print(f"ERROR saving frame at timestep {elapsed}: {e}")
-        finally:
-            bin_data.close()
+        if self.use_disk_cache:
+            # Write directly to disk
+            frame_file = os.path.join(self.temp_dir, f"frame_{self.frame_count:06d}.png")
+            try:
+                fig.savefig(frame_file, format='png', bbox_inches='tight',
+                        facecolor=fig.get_facecolor(), edgecolor='none')
+                self.frame_count += 1
+                print(f'Frame saved to disk at timestep: {elapsed} (file: {frame_file})')
+            except Exception as e:
+                print(f"ERROR saving frame at timestep {elapsed}: {e}")
+            finally:
+                # Explicitly close figure to free memory
+                plt.close(fig)
+        else:
+            # Original memory-based approach
+            bin_data = BytesIO()
+            try:
+                fig.savefig(bin_data, format=frame_format, bbox_inches='tight', 
+                        facecolor=fig.get_facecolor(), edgecolor='none')
+                frame_data = bin_data.getvalue()
+                
+                if len(frame_data) == 0:
+                    print(f"WARNING: Empty frame data at timestep {elapsed}")
+                    return
+                
+                self._saved_frames.append(frame_data)
+                print(f'PNG added to bindata for timestep: {elapsed} (size: {len(frame_data)} bytes)')
+                
+            except Exception as e:
+                print(f"ERROR saving frame at timestep {elapsed}: {e}")
+            finally:
+                bin_data.close()
+                # Explicitly close figure to free memory
+                plt.close(fig)
 
     # Below code is adopted from the MEEP source code:
     # https://github.com/NanoComp/meep/blob/dc27a1e0568dbb67dd9a36f8b00ce6be4ff6ea9b/python/visualization.py
@@ -496,45 +521,28 @@ class Animate2DArray:
             except Exception as e:
                 print(f"Error running FFmpeg for GIF: {e}")
     
+
     def to_mp4(self, filename: str, frame_format: str = 'png', codec: str = 'h264'):
         """
-        Memory-safe MP4 creation using temporary files with frame dimension fixes.
+        Memory-safe MP4 creation using frames from disk or memory.
         """
         import tempfile
         import shutil
         
-        if not self._saved_frames:
-            print("ERROR: No frames to save!")
-            return
-        
-        # Create temporary directory for frames
-        with tempfile.TemporaryDirectory() as temp_dir:
-            print(f"Writing frames to temporary directory: {temp_dir}")
-            
-            # Write frames to individual files
-            frame_files = []
-            for i, frame_data in enumerate(self._saved_frames):
-                if len(frame_data) == 0:
-                    continue
-                    
-                frame_file = os.path.join(temp_dir, f"frame_{i:06d}.png")
-                try:
-                    with open(frame_file, 'wb') as f:
-                        f.write(frame_data)
-                    frame_files.append(frame_file)
-                except Exception as e:
-                    print(f"Error writing frame {i}: {e}")
-            
-            if not frame_files:
-                print("ERROR: No valid frames written!")
+        if self.use_disk_cache:
+            # Frames already on disk
+            if self.frame_count == 0:
+                print("ERROR: No frames to save!")
                 return
             
-            # Use FFmpeg with file input and ensure even dimensions
+            print(f"Creating MP4 from {self.frame_count} frames on disk")
+            
+            # Use FFmpeg directly with cached frames
             command = [
                 "ffmpeg",
                 "-framerate", str(self.fps),
-                "-i", os.path.join(temp_dir, "frame_%06d.png"),
-                "-vf", "pad=width=ceil(iw/2)*2:height=ceil(ih/2)*2",  # Pad to even dimensions
+                "-i", os.path.join(self.temp_dir, "frame_%06d.png"),
+                "-vf", "pad=width=ceil(iw/2)*2:height=ceil(ih/2)*2",
                 "-vcodec", codec,
                 "-pix_fmt", "yuv420p",
                 "-crf", "18",
@@ -547,8 +555,6 @@ class Animate2DArray:
                 
                 if result.returncode == 0:
                     print(f"MP4 saved successfully to {filename}")
-                    
-                    # Verify output file exists and show size
                     if os.path.exists(filename):
                         file_size = os.path.getsize(filename)
                         print(f"Output file size: {file_size/1024/1024:.2f} MB")
@@ -557,6 +563,62 @@ class Animate2DArray:
                     
             except Exception as e:
                 print(f"Error running FFmpeg: {e}")
+            finally:
+                # Clean up temp directory
+                if os.path.exists(self.temp_dir):
+                    shutil.rmtree(self.temp_dir)
+                    print(f"Cleaned up temporary directory: {self.temp_dir}")
+        else:
+            # Original memory-based approach (existing code)
+            if not self._saved_frames:
+                print("ERROR: No frames to save!")
+                return
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                print(f"Writing frames to temporary directory: {temp_dir}")
+                
+                frame_files = []
+                for i, frame_data in enumerate(self._saved_frames):
+                    if len(frame_data) == 0:
+                        continue
+                        
+                    frame_file = os.path.join(temp_dir, f"frame_{i:06d}.png")
+                    try:
+                        with open(frame_file, 'wb') as f:
+                            f.write(frame_data)
+                        frame_files.append(frame_file)
+                    except Exception as e:
+                        print(f"Error writing frame {i}: {e}")
+                
+                if not frame_files:
+                    print("ERROR: No valid frames written!")
+                    return
+                
+                command = [
+                    "ffmpeg",
+                    "-framerate", str(self.fps),
+                    "-i", os.path.join(temp_dir, "frame_%06d.png"),
+                    "-vf", "pad=width=ceil(iw/2)*2:height=ceil(ih/2)*2",
+                    "-vcodec", codec,
+                    "-pix_fmt", "yuv420p",
+                    "-crf", "18",
+                    "-y",
+                    filename
+                ]
+                
+                try:
+                    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+                    
+                    if result.returncode == 0:
+                        print(f"MP4 saved successfully to {filename}")
+                        if os.path.exists(filename):
+                            file_size = os.path.getsize(filename)
+                            print(f"Output file size: {file_size/1024/1024:.2f} MB")
+                    else:
+                        print(f"FFmpeg error: {result.stderr}")
+                        
+                except Exception as e:
+                    print(f"Error running FFmpeg: {e}")
 
 #!================================================================================================
 #!================================================================================================
@@ -633,7 +695,8 @@ def save_animation(sim):
     print("All animations saved and memory cleaned up.")
     return
 
-# Modify E_field_power_dB to accept the function name directly
+
+@profile
 def E_field_power_dB(sim, component, component_name, func_name=None):
     """
     Generic function to process field power in dB for any field component.
@@ -645,7 +708,6 @@ def E_field_power_dB(sim, component, component_name, func_name=None):
     # Use global variables
     global Nfps, image_every, anim_file_name, animation_plotting_params
     
-    # Check if globals are set
     if 'Nfps' not in globals() or Nfps is None:
         raise ValueError("Animation parameters not set. Call set_animation_params() first.")
     
@@ -676,43 +738,28 @@ def E_field_power_dB(sim, component, component_name, func_name=None):
     invert = plotting_params.get('invert', False)
     
     # Initialize animation object if it doesn't exist
+    # MEMORY OPTIMIZATION: Use disk caching by default
     if not hasattr(caller_func, 'anim') or caller_func.anim is None:
-        caller_func.anim = Animate2DArray(fps=fps)
-        print(f"Initializing {component_name}^2 animation object...")
+        caller_func.anim = Animate2DArray(fps=fps, use_disk_cache=True)  # CHANGED
+        print(f"Initializing {component_name}^2 animation object with disk caching...")
 
-    # Get field data and convert to power in dB
+    # MEMORY OPTIMIZATION: Get field data in-place where possible
     field_arr = sim.get_array(component=component,
                               size=sim.cell_size,
                               center=mp.Vector3(),
-                              cmplx= True).transpose()
+                              cmplx=True).transpose()
     
-    # # Ensure we're working with the magnitude for complex fields
-    # if np.iscomplexobj(field_arr):
-    #     field_arr = np.abs(field_arr)
-    
+    # MEMORY OPTIMIZATION: Process in-place to avoid copies
     if np.iscomplexobj(field_arr):
-        field_arr = np.abs(field_arr.real)**2
-        # field_arr = np.angle(field_arr)
-
-    if np.isrealobj(field_arr):
-        field_arr = field_arr**2
-
-    # # Convert to power (real values)
-    # # complex conjugate multiplication
-    # field_arr = field_arr**2 #np.conj(field_arr)
+        field_arr = np.abs(field_arr.real, out=np.empty(field_arr.shape, dtype=np.float64))
+        field_arr **= 2  # In-place squaring
+    elif np.isrealobj(field_arr):
+        field_arr **= 2  # In-place squaring
     
-    # Ensure we have real values before taking log
-    # field_arr = np.real(field_arr)
+    # Convert to dB (in-place where possible)
+    np.log10(field_arr, out=field_arr)
+    field_arr *= 10
     
-    # # Handle zeros to avoid log(0)
-    # field_arr = np.where(field_arr <= 0, 1e-20, field_arr)
-    
-    # Convert to dB
-    field_arr = 10*np.log10(field_arr)
-    
-    # # Ensure the result is real
-    # field_arr = np.real(field_arr)
-
     # Get dielectric data for overlay
     eps_data = sim.get_array(component=mp.Dielectric,
                              size=sim.cell_size,
@@ -720,39 +767,33 @@ def E_field_power_dB(sim, component, component_name, func_name=None):
 
     print(f"Time step: {sim.meep_time()}")
     print(f"Creating frame for {component_name}^2 field at time {sim.meep_time()}...")
-    print(f"Field array dtype: {field_arr.dtype}, shape: {field_arr.shape}")
-    print(f"Field array min/max: {np.min(field_arr):.2f}/{np.max(field_arr):.2f}")
 
     # IMPORTANT: Call this BEFORE using cmap_blue
     set_plt_params(plt, len(field_arr[1]), len(field_arr[0]), base_factor=12)
     
-    # Handle colormap selection - MOVED AFTER set_plt_params
+    # Handle colormap selection
     cmap_name = plotting_params.get('cmap', 'custom_blue')
     if cmap_name == 'custom_blue':
-        # Use the predefined custom blue colormap
         plot_cmap = cmap_blue
     else:
-        # Use the specified matplotlib colormap
         plot_cmap = cmap_name
 
     # Set up axes and ticks
     x, y, z, w = sim.get_array_metadata()
-    del z, w
+    del z, w  # MEMORY OPTIMIZATION: Delete immediately
     x_min, x_max = min(x), max(x)
     y_min, y_max = min(y), max(y)
-    x_axis, y_axis = np.meshgrid(np.linspace(x_min, x_max, len(x)), np.linspace(y_min, y_max, len(y)))
     
-    # Create tick marks
+    # MEMORY OPTIMIZATION: Don't create full meshgrid if not needed
     num_ticks = plotting_params.get('num_ticks', 5)
-
-    x_ticks = np.linspace(0, len(x_axis[0]), num_ticks).astype(int)
-    x_tick_labels = np.round(np.linspace(x_axis[0, 0], x_axis[0, -1], num_ticks), 1)
-    y_ticks = np.linspace(0, len(y_axis[:, 0]), num_ticks).astype(int)
-    y_tick_labels = np.round(np.linspace(y_axis[0, 0], y_axis[-1, 0], num_ticks), 1)
+    x_ticks = np.linspace(0, len(x), num_ticks).astype(int)
+    x_tick_labels = np.round(np.linspace(x_min, x_max, num_ticks), 1)
+    y_ticks = np.linspace(0, len(y), num_ticks).astype(int)
+    y_tick_labels = np.round(np.linspace(y_min, y_max, num_ticks), 1)
 
     # Create the frame
     caller_func.anim.create_frame(plot_func='plot_2d_array',
-                    kwargs= {'array': field_arr,
+                    kwargs={'array': field_arr,
                             'eps_data': eps_data,
                             'title': title,
                             'xlabel': xlabel,
@@ -768,6 +809,14 @@ def E_field_power_dB(sim, component, component_name, func_name=None):
                             'scale': _scale_,
                             'vmin': vmin,
                             'vmax': vmax})
+    
+    # MEMORY OPTIMIZATION: Explicitly delete large arrays
+    del field_arr, eps_data, x, y
+    
+    # MEMORY OPTIMIZATION: Force garbage collection periodically
+    import gc
+    if int(sim.meep_time()) % 10 == 0:  # Every 10 timesteps
+        gc.collect()
     
     return
 

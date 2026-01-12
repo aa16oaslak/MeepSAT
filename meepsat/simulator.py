@@ -26,10 +26,10 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib import rc
 
-import meepsat.components_2D_meep as comp # Importing the components made using the MEEP functions
-import meepsat.components_2D_eps as comp_eps # Importing the components made using the epsilon functions
+import meepsat.meep_geometry as comp # Importing the components made using the MEEP functions
+import meepsat.permittivity_components as comp_eps # Importing the components made using the epsilon functions
 # import meep_visualization_meepsat_ver as mpsat_plt # Importing the plotting functions
-import meepsat.extra_functions as exf # Importing the extra functions
+import meepsat.helpers as exf # Importing the extra functions
 
 
 def check_resolution_and_pml(data,
@@ -751,7 +751,7 @@ class sim_init():
                                 mp.at_every(image_every, mp_sim_run.Ez2_dB),
                                 mp.at_end(mp.output_efield_z),
                                 until=self.runtime)"""
-                import mp_sim_run, json_to_script
+                import meepsat.stepfunctions as stepfunctions, json_to_script
                 # if flux_monitor_list:
                 #     print("Initialising the flux monitors in mp_sim_run.py:")
                 #     print("====================================================================")
@@ -769,7 +769,7 @@ class sim_init():
                 #         print("==============================================================")
 
                 self.sim.use_output_directory(dname= savepath)
-                mp_sim_run.set_animation_params(anim_params= {'image_every': image_every, 
+                stepfunctions.set_animation_params(anim_params= {'image_every': image_every, 
                                                               'Nfps': Nfps, 
                                                               'anim_file_name': savepath + movie_name}) 
 
@@ -794,7 +794,7 @@ class sim_init():
                 print("Initialising the various Monitors in mp_sim_run.py:")
                 print("====================================================================")
                 print("mp_sim_run.set_volume_monitor_registry(monitor_list)")
-                mp_sim_run.set_volume_monitor_registry(monitor_list, savepath, image_every)
+                stepfunctions.set_volume_monitor_registry(monitor_list, savepath, image_every)
                 print("====================================================================")
 
                 print("Simulation running with the following MEEP script:")

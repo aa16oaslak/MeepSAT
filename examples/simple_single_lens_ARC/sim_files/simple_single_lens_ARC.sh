@@ -82,7 +82,7 @@
 #~ For MEEPSAT simulations ON your local machine
 source ~/.bashrc
 source $(conda info --base)/etc/profile.d/conda.sh
-conda activate meep_single_test
+conda activate parallel_meep
 
 python_script_file_name=simple_single_lens_ARC
 
@@ -94,7 +94,7 @@ base_output_dir=../output_files
 mkdir -p "$base_output_dir"
 
 # JSON file path
-json_file_path=/home/aak/Phd_work/public_github_repo/MeepSAT/examples/simple_single_lens_ARC/sim_files/simple_single_lens_ARC.json
+json_file_path=/home/ashesh/PhD_work/MeepSAT/examples/simple_single_lens_ARC/sim_files/simple_single_lens_ARC.json
 
 # Define resolution range
 resolutions=(12) #20)  # Add your desired resolutions here
