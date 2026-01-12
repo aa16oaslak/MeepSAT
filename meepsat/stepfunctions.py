@@ -3,62 +3,6 @@ import os
 import site
 from pathlib import Path
 from memory_profiler import profile
-
-# First check for MEEPSAT_PATH environment variable (highest priority)
-meepsat_env_path = os.environ.get('MEEPSAT_PATH')
-if meepsat_env_path and os.path.exists(os.path.join(meepsat_env_path, 'meepsat')):
-    print(f"Using MEEPSAT from environment variable: {{meepsat_env_path}}")
-    main_dir = meepsat_env_path
-    meepsat_dir = os.path.join(main_dir, 'meepsat')
-    sys.path.append(main_dir)
-    sys.path.append(meepsat_dir)
-    meepsat_found = True
-else:
-    # Method 1: Try to import directly if MEEPSAT is installed properly
-    try:
-        import meepsat
-        print("MEEPSAT found in installed packages")
-        meepsat_dir = os.path.dirname(meepsat.__file__)
-        main_dir = os.path.dirname(meepsat_dir)
-        sys.path.append(meepsat_dir)  # Add meepsat directory to path for submodule imports
-        meepsat_found = True
-    except ImportError:
-        # Method 2: Try to find MEEPSAT in common locations
-        possible_paths = [
-            Path.cwd().parent,                     # Parent of current directory
-            Path.cwd(),                           # Current directory
-            Path(__file__).resolve().parent.parent,  # Parent of script directory
-            Path.home() / "Phd_work/MEEPSAT_WFH",      # User's home directory + common path
-            Path('/cfs/data/asab1238/MEEPSAT_WFH'),   # HPC specific path
-            Path('/cfs/data/asab1238/MEEPSAT_WFH')    # Another HPC specific path
-        ]
-        
-        meepsat_found = False
-        for path in possible_paths:
-            try:
-                meepsat_dir = path / "meepsat"
-                if meepsat_dir.exists():
-                    main_dir = str(path)
-                    meepsat_dir = str(meepsat_dir)
-                    sys.path.append(main_dir)
-                    sys.path.append(meepsat_dir)  # Critical: add meepsat directory for submodule imports
-                    print(f"MEEPSAT found at: {{meepsat_dir}}")
-                    meepsat_found = True
-                    break
-            except Exception as e:
-                print(f"Error checking path {{path}}: {{e}}")
-        
-        if not meepsat_found:
-            print("WARNING: MEEPSAT directory not found automatically.")
-            print("Please set the MEEPSAT_PATH environment variable before running.")
-            print("For example: export MEEPSAT_PATH=/path/to/MEEPSAT")
-            main_dir = "."
-            meepsat_dir = "./meepsat"
-            sys.path.append(main_dir)
-            sys.path.append(meepsat_dir)
-
-
-
 import time
 import os
 import h5py
@@ -69,54 +13,27 @@ import os
 from matplotlib.colors import LinearSegmentedColormap, LogNorm
 from matplotlib import animation
 from typing import Callable, Union, Any, Tuple, List, Optional
-import meepsat.helpers as exf
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib
 import matplotlib.colors as colors
 import matplotlib.cbook as cbook
 import subprocess
 
+import meepsat.helpers as exf
+
+
 import warnings
 warnings.filterwarnings("ignore")
 
-# Step functions
-
-def extract_source_power(simulation):
-    # # Get the DFT array for the source monitor
-    # source_fields = simulation.get_array(vol=source_monitor_region, 
-    #                                      component= mp.Ez,
-    #                                      cmplx= True)
-
-    # Extract the fields: Ex, Ey, Ez, Hx, Hy, Hz
-    source_fields = [simulation.get_source(component= c,
-                                         vol=source_monitor_region) for c in [mp.Ex, mp.Ey, mp.Ez, mp.Hx, mp.Hy, mp.Hz]]
-
-    # Calculate the power (magnitude squared)
-    source_power = np.abs(source_fields)**2
-
-    # Save the power data to an npz compressed file
-    np.savez_compressed(os.path.join(savepath, "source_power_{0}.npz".format(simulation.meep_time())),
-                        field=source_fields,
-                        power=source_power,
-                        y_coords=np.linspace(-size_y/2, size_y/2, len(source_fields)))
-    
-    print(f"Source power data saved to {os.path.join(savepath, 'source_power.npz')} at timestep {simulation.meep_time()}.")
-
-
-# Fnction to calculate the flux array at a given timestep
-def extract_flux_data_from_monitor(simulation):
-    # Extract the total flux from the monitor (for normalization)
-    flux_data = mp.get_fluxes(source_flux_monitor_ref)
-    # Save the flux data to an npz compressed file
-    np.savez_compressed(os.path.join(savepath, "source_total_flux_reference_{0}.npz".format(simulation.meep_time())),
-                        flux=flux_data)    
-
+#!================================================================================================
 
 """
-INitialising some plotting functions
+Step Functions for Animations and Monitor Data Collection 
+#! IMPORTANT 
+NOTE: Monitor data collection functions are at the bottom and need to be properly checked before publishing.
 """
-###! SOME global variables
 
+# Initialising global variables for animation parameters
 def set_animation_params(anim_params: dict):
     """
     Set the global animation parameters for the simulation.
@@ -1226,3 +1143,201 @@ for component_info in VOLUME_MONITOR_COMPONENTS:
 #     return
 # # Make flux calculation available at the end of simulation
 # globals()["calculate_transmission_reflection"] = calculate_transmission_reflection
+
+#! ================================================================================================
+#! ================================================================================================
+#! ================================================================================================
+# Field StepFunctions
+
+# Set global parameters for field step extraction functions
+def set_field_params(field_params: dict):
+    """
+    Set the global field extraction parameters for the simulation.
+    """
+    global size_x, size_y, savepath
+    global downsampling_factor_x, downsampling_factor_y
+    
+    if "size_x" not in field_params:
+        raise ValueError("size_x must be specified in field_params")
+    if "size_y" not in field_params:
+        raise ValueError("size_y must be specified in field_params")
+    
+    size_x = field_params["size_x"]
+    size_y = field_params["size_y"]
+    savepath = field_params.get("savepath", ".")
+    downsampling_factor_x = field_params.get("downsampling_factor_x", 1)
+    downsampling_factor_y = field_params.get("downsampling_factor_y", 1)
+    
+    print("Field extraction parameters set:")
+    print(f"  size_x: {size_x}")
+    print(f"  size_y: {size_y}")
+    print(f"  savepath: {savepath}")
+    print(f"  downsampling_factor_x: {downsampling_factor_x}")
+    print(f"  downsampling_factor_y: {downsampling_factor_y}")
+
+    # Initialising count and global field arrays
+    global count
+    count = 0
+    global Ex_global, Ey_global, Ez_global, Hx_global, Hy_global, Hz_global
+    Ex_global = None
+    Ey_global = None
+    Ez_global = None
+    Hx_global = None
+    Hy_global = None
+    Hz_global = None
+    
+def extract_xyzw(simulation):
+    # Define a box to capture the fields in the entire simulation cell
+    box = mp.Volume(center=mp.Vector3(0, 0, 0),
+                    size=mp.Vector3(size_x, size_y, 0)
+    )
+    (x,y,z,w) = simulation.get_array_metadata(vol=box)
+
+    #Apply downsampling to x, y, w if needed
+    if downsampling_factor_x > 1:
+        x = x[::downsampling_factor_x]
+        y = y[::downsampling_factor_y]
+        w = w[::downsampling_factor_x, ::downsampling_factor_y]
+
+    # Save the xyzw data to an npz compressed file
+    np.savez_compressed(os.path.join(savepath, "xyzw_{0}.npz".format(simulation.meep_time())),
+                        x_coords=x,
+                        y_coords=y,
+                        weights=w)
+
+    return
+
+def accumulate_efield_and_hfield(simulation):
+    """
+    Accumulate electric field and magnetic field over a range of timesteps with downsampling to reduce memory usage
+    """
+    # Downsample the arrays
+    def downsample(array, downsample_x, downsample_y):
+        original_shape = array.shape
+        new_shape = (original_shape[0] // downsample_x,
+                     original_shape[1] // downsample_y)
+        
+        # Truncate the array to make it divisible by downsample factors
+        truncated_array = array[:new_shape[0]*downsample_x, :new_shape[1]*downsample_y]
+
+        # Reshape and average
+        downsampled_array = truncated_array.reshape(new_shape[0], downsample_x,
+                                                    new_shape[1], downsample_y).mean(axis=(1, 3))
+        return downsampled_array
+    
+    # global count
+    if count == 0:
+        print(f"Downsampling by factors ({downsampling_factor_x}, {downsampling_factor_y}) to reduce memory usage.")
+
+    # Define the volume for the entire simulation cell
+    full_volume = mp.Volume(center=mp.Vector3(0, 0, 0),
+                            size=mp.Vector3(size_x, size_y, 0))
+    
+    # global Ex_global, Ey_global, Ez_global, Hx_global, Hy_global, Hz_global
+
+    # Get and downsample E field components
+    ex = simulation.get_array(vol=full_volume, component=mp.Ex, cmplx=True)
+    ex_down = downsample(ex, downsampling_factor_x, downsampling_factor_y)
+    
+    # Initialize globals on first call with downsampled shape
+    if Ex_global is None:
+        Ex_global = np.zeros_like(ex_down, dtype=np.complex64)
+        Ey_global = np.zeros_like(ex_down, dtype=np.complex64)
+        Ez_global = np.zeros_like(ex_down, dtype=np.complex64)
+        Hx_global = np.zeros_like(ex_down, dtype=np.complex64)
+        Hy_global = np.zeros_like(ex_down, dtype=np.complex64)
+        Hz_global = np.zeros_like(ex_down, dtype=np.complex64)
+        print(f"Initialized global arrays with shape from {ex.shape} to {ex_down.shape} for downsampled storage.")
+        
+    np.add(Ex_global, ex_down, out=Ex_global)
+    del ex, ex_down
+
+    # Ey
+    ey = simulation.get_array(vol=full_volume, component=mp.Ey, cmplx=True)
+    ey_down = downsample(ey, downsampling_factor_x, downsampling_factor_y)
+    np.add(Ey_global, ey_down, out=Ey_global)
+    del ey, ey_down
+
+    # Ez
+    ez = simulation.get_array(vol=full_volume, component=mp.Ez, cmplx=True)
+    ez_down = downsample(ez, downsampling_factor_x, downsampling_factor_y)
+    np.add(Ez_global, ez_down, out=Ez_global)
+    del ez, ez_down
+
+    # Hx
+    hx = simulation.get_array(vol=full_volume, component=mp.Hx, cmplx=True)
+    hx_down = downsample(hx, downsampling_factor_x, downsampling_factor_y)
+    np.add(Hx_global, hx_down, out=Hx_global)
+    del hx, hx_down
+
+    # Hy
+    hy = simulation.get_array(vol=full_volume, component=mp.Hy, cmplx=True)
+    hy_down = downsample(hy, downsampling_factor_x, downsampling_factor_y)
+    np.add(Hy_global, hy_down, out=Hy_global)
+    del hy, hy_down
+
+    # Hz
+    hz = simulation.get_array(vol=full_volume, component=mp.Hz, cmplx=True)
+    hz_down = downsample(hz, downsampling_factor_x, downsampling_factor_y)
+    np.add(Hz_global, hz_down, out=Hz_global)
+    del hz, hz_down
+
+    count += 1
+    if count % 10 == 0:  # Print every 10 timesteps to reduce output
+        print(f"Fields accumulated at t={simulation.meep_time():.2f} (count={count})")
+
+# Calculate the average E and H fields over the simulation time
+def calculate_average_fields(array, count):
+    return array / count
+
+def save_accumulated_fields(simulation):
+    """
+    Save the accumulated E and H fields to compressed npz files
+    """
+    Ex_avg = calculate_average_fields(Ex_global, count)
+    del Ex_global
+
+    Ey_avg = calculate_average_fields(Ey_global, count)
+    del Ey_global
+
+    Ez_avg = calculate_average_fields(Ez_global, count)
+    del Ez_global
+
+    Hx_avg = calculate_average_fields(Hx_global, count)
+    del Hx_global
+
+    Hy_avg = calculate_average_fields(Hy_global, count)
+    del Hy_global
+
+    Hz_avg = calculate_average_fields(Hz_global, count)
+    del Hz_global
+
+    # Save the average E and H fields to npz files
+
+    #Ex, Ey, Ez
+    np.savez_compressed(
+        os.path.join(savepath, "efield_timeavg.npz"),
+        ex_real=np.real(Ex_avg),
+        ex_imag=np.imag(Ex_avg),
+        ey_real=np.real(Ey_avg),
+        ey_imag=np.imag(Ey_avg),
+        ez_real=np.real(Ez_avg),
+        ez_imag=np.imag(Ez_avg),
+        count=count
+    )
+
+    # Hx, Hy, Hz
+    np.savez_compressed(
+        os.path.join(savepath, "hfield_timeavg.npz"),
+        hx_real=np.real(Hx_avg),
+        hx_imag=np.imag(Hx_avg),
+        hy_real=np.real(Hy_avg),
+        hy_imag=np.imag(Hy_avg),
+        hz_real=np.real(Hz_avg),
+        hz_imag=np.imag(Hz_avg),
+        count=count
+    )
+
+#! ================================================================================================
+#! ================================================================================================
+#! ================================================================================================

@@ -95,6 +95,8 @@
         "get_mp4": true,
         "image_every": 25,
         "Nfps": 12,
+        "downsample_x": 1,
+        "downsample_y": 1,
         "movie_name": "single_lens_testing_ARC",
         "plotting_params": {
                 "Ez2_dB": {

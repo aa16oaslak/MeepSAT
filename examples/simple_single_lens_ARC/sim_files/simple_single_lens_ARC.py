@@ -101,27 +101,8 @@ exec(json_to_script.add_slab(data))
 exec(json_to_script.add_aperture(data))
 #~ ---------------------------------------------
 
-#~ Adding absorbers
-#~ Add pyramidal absorbers with substrate 
-# absorbers = comp_meep.PyramidalAbsorbers(mpsat_sim,
-#                                          base_width = 6,
-#                                          height = 9,
-#                                          num_pyramids = 150,
-#                                          n_layers = 45,
-#                                          top_width = 0.5,
-#                                          epsilon_real = 5.4,
-#                                          epsilon_imag = 0.8,
-#                                          freq = data["sources"]["source1"]["frequecy"],
-#                                          add_substrate=True,
-#                                          substrate_thickness=4 + 7,
-#                                          y_top_offset=-7,
-#                                          y_bottom_offset=7,
-#                                          coverage_percent=100)
 
-# mpsat_sim.meep_geometry.extend(absorbers.assemble())
-
-
-#! DEFINING THE SIMULATION OBJECT
+#~ DEFINING THE SIMULATION OBJECT
 # Mirror symmetry along y direction (x=0 plane)
 symmetries = [mp.Mirror(mp.Y, phase=+1)] 
 
@@ -135,16 +116,55 @@ simulation = mp.Simulation(
     symmetries = symmetries,
     force_complex_fields= True)
 
-# Plot the geometry to verify
-simulation.plot2D()
-# Show plot for 60 seconds
-plt.pause(60)
-plt.close()
+simulation.use_output_directory(savepath)
+#~ ---------------------------------------------
 
+#~ Run simulation briefly to store the epsilon map
+sim.plot_and_save_epsilon(
+    simulation=simulation,
+    savepath=savepath,
+    filename_prefix="geometry_plot",
+    epsilon_data_name="epsilon",
+    size_x=size_x,
+    size_y=size_y,
+    vmin=0.5,
+    vmax=3,
+    cmap='viridis',
+    figsize=(8, 4),
+    dpi=300
+)
+#~ ---------------------------------------------
+#~ Set the stepfunctions parameters
+#! Animation Parameters
+stepfunctions.set_animation_params(anim_params= {'image_every': data["output"]["animation_options"]["image_every"], 
+                                              'Nfps': data["output"]["animation_options"]["Nfps"], 
+                                              'anim_file_name': savepath + "/"+ data["output"]["animation_options"]["movie_name"] + ".mp4"})
 
-# # #~ Set PEC boundary conditions
-# # simulation.set_boundary(direction=mp.Y, side=mp.Low, condition=mp.Metallic)
-# # simulation.set_boundary(direction=mp.Y, side=mp.High, condition=mp.Metallic)
+#! Field Parameters
+stepfunctions.set_field_params(field_params= {'size_x': size_x,
+                                              'size_y': size_y,
+                                              'savepath': savepath,
+                                              'downsampling_factor_x': data["output"]["field_options"]["downsample_x"],
+                                              'downsampling_factor_y': data["output"]["field_options"]["downsample_y"]})
+
+#! Runtime parameters
+timestepDuration = data["output"]["animation_options"]["image_every"]
+total_time= 400
+# Calculate the timeperiod of the source frequency 
+period = 1 / source_freq  # Time period in MEEP time units
+# We need atleast 10 points per period to properly sample the wave
+points_per_period = 10
+dt = period / points_per_period  # Time step in MEEP time units
+t0 = int(total_time-10) # Time after which we start extracting power near the absorbers
+#~ ---------------------------------------------
+simulation.run(mp.at_every(timestepDuration, stepfunctions.Ez2_dB),
+               mp.after_time(t0, mp.at_every(dt, stepfunctions.accumulate_efield_and_hfield)),
+               mp.at_end(stepfunctions.save_animation),
+               mp.at_end(stepfunctions.save_accumulated_fields),
+               mp.at_end(stepfunctions.extract_xyzw),
+               until = total_time)
+
+print("Simulation completed.")                                                 
 
 # #~ ---------------------------------------------
 # # Define frequency parameters (for single frequency source)

@@ -1,22 +1,8 @@
-
-
-
-"""
-In case we want to use our own version of MEEP
-
-import sys
-import os
-
-# Add the module's directory to the Python path
-module_path = os.path.expanduser('~/Phd_work/MEEP/my_MEEP/MEEP_original_package')
-if module_path not in sys.path:
-    sys.path.append(module_path)
-"""
-
 """
 This module contains all the necessary functions for initialising, running and anlysing the simulation
 """
 
+import os
 import warnings
 from typing import Callable
 #import meep_testings as mp
@@ -30,6 +16,69 @@ import meepsat.meep_geometry as comp # Importing the components made using the M
 import meepsat.permittivity_components as comp_eps # Importing the components made using the epsilon functions
 # import meep_visualization_meepsat_ver as mpsat_plt # Importing the plotting functions
 import meepsat.helpers as exf # Importing the extra functions
+
+def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_name, 
+                          size_x, size_y, vmin=0.5, vmax=3, cmap='viridis', 
+                          figsize=(8, 4), dpi=300, return_epsilon=False):
+    """
+    Plot and save the epsilon (permittivity) map from a MEEP simulation.
+    
+    Parameters:
+    -----------
+    simulation : mp.Simulation
+        The MEEP simulation object
+    savepath : str
+        Directory path where files will be saved
+    filename_prefix : str
+        Prefix for the output filenames (e.g., "geometry_plot")
+    epsilon_data_name : str
+        Name for the epsilon dataset in the HDF5 file
+    size_x : float
+        Size of simulation cell in x direction (mm)
+    size_y : float
+        Size of simulation cell in y direction (mm)
+    vmin : float, optional
+        Minimum value for colormap scale (default: 0.5)
+    vmax : float, optional
+        Maximum value for colormap scale (default: 3)
+    cmap : str, optional
+        Matplotlib colormap name (default: 'viridis')
+    figsize : tuple, optional
+        Figure size (width, height) in inches (default: (8, 4))
+    dpi : int, optional
+        Resolution for saved figure (default: 300)
+    
+    Returns:
+    --------
+    epsilon : np.ndarray
+        The extracted epsilon array
+    """
+    # Run simulation briefly to get epsilon
+    simulation.run(until=0)
+    epsilon = simulation.get_epsilon()
+    
+    # Plot the epsilon map geometry
+    plt.figure(figsize=figsize)
+    plt.imshow(epsilon.T, interpolation='spline36', cmap=cmap, origin='lower', 
+               extent=[-size_x/2, size_x/2, -size_y/2, size_y/2],
+               vmin=vmin, vmax=vmax)
+    plt.colorbar(label='Permittivity (ε)')
+    plt.xlabel('X (mm)')
+    plt.ylabel('Y (mm)')
+    plt.title('Epsilon Map')
+    plt.savefig(os.path.join(savepath, f"{filename_prefix}.png"), dpi=dpi, bbox_inches='tight')
+    plt.close()
+    
+    # Save the epsilon map to an HDF5 file
+    h5_filename = os.path.join(savepath, f"{filename_prefix}.h5")
+    with h5py.File(h5_filename, "w") as h5file:
+        h5file.create_dataset(epsilon_data_name, data=epsilon)
+    
+    print(f"Epsilon plot saved to: {os.path.join(savepath, filename_prefix)}.png")
+    print(f"Epsilon data saved to: {h5_filename}")
+    
+    if return_epsilon:
+        return epsilon
 
 
 def check_resolution_and_pml(data,
