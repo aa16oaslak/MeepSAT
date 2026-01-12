@@ -11,11 +11,62 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib import rc
+import h5py
 
 import meepsat.meep_geometry as comp # Importing the components made using the MEEP functions
 import meepsat.permittivity_components as comp_eps # Importing the components made using the epsilon functions
 # import meep_visualization_meepsat_ver as mpsat_plt # Importing the plotting functions
 import meepsat.helpers as exf # Importing the extra functions
+
+
+def calculate_runtime_parameters(source_freq, total_time, points_per_period=10, 
+                                 extraction_offset=10):
+    """
+    Calculate runtime parameters for MEEP simulation including time step and extraction start time.
+    
+    Parameters:
+    -----------
+    source_freq : float
+        Source frequency in MEEP units (GHz)
+    total_time : float
+        Total simulation time in MEEP time units
+    points_per_period : int, optional
+        Number of sampling points per wave period (default: 10)
+    extraction_offset : float, optional
+        Time before end of simulation to start data extraction (default: 10)
+    
+    Returns:
+    --------
+    dict
+        Dictionary containing:
+        - 'period': Time period of the source frequency
+        - 'dt': Time step for sampling
+        - 't0': Time to start data extraction
+        - 'points_per_period': Number of points per period used
+    """
+    # Calculate the time period of the source frequency 
+    period = 1 / source_freq  # Time period in MEEP time units
+    
+    # Calculate time step to properly sample the wave
+    dt = period / points_per_period  # Time step in MEEP time units
+    
+    # Time after which we start extracting data
+    t0 = int(total_time - extraction_offset)
+    
+    runtime_params = {
+        'period': period,
+        'dt': dt,
+        't0': t0,
+        'points_per_period': points_per_period
+    }
+    
+    print(f"Runtime parameters calculated:")
+    print(f"  Period: {period:.4f} MEEP time units")
+    print(f"  Time step (dt): {dt:.4f} MEEP time units")
+    print(f"  Extraction start time (t0): {t0} MEEP time units")
+    print(f"  Points per period: {points_per_period}")
+    
+    return runtime_params
 
 def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_name, 
                           size_x, size_y, vmin=0.5, vmax=3, cmap='viridis', 

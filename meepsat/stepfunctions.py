@@ -1225,7 +1225,7 @@ def accumulate_efield_and_hfield(simulation):
                                                     new_shape[1], downsample_y).mean(axis=(1, 3))
         return downsampled_array
     
-    # global count
+    global count
     if count == 0:
         print(f"Downsampling by factors ({downsampling_factor_x}, {downsampling_factor_y}) to reduce memory usage.")
 
@@ -1233,7 +1233,7 @@ def accumulate_efield_and_hfield(simulation):
     full_volume = mp.Volume(center=mp.Vector3(0, 0, 0),
                             size=mp.Vector3(size_x, size_y, 0))
     
-    # global Ex_global, Ey_global, Ez_global, Hx_global, Hy_global, Hz_global
+    global Ex_global, Ey_global, Ez_global, Hx_global, Hy_global, Hz_global
 
     # Get and downsample E field components
     ex = simulation.get_array(vol=full_volume, component=mp.Ex, cmplx=True)
@@ -1294,6 +1294,9 @@ def save_accumulated_fields(simulation):
     """
     Save the accumulated E and H fields to compressed npz files
     """
+    global Ex_global, Ey_global, Ez_global, Hx_global, Hy_global, Hz_global, count
+    print("Calculating average E and H fields over accumulated timesteps...")
+    
     Ex_avg = calculate_average_fields(Ex_global, count)
     del Ex_global
 
