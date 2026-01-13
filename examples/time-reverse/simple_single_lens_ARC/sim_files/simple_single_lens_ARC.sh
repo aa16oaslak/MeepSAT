@@ -16,7 +16,7 @@ base_output_dir=../output_files
 mkdir -p "$base_output_dir"
 
 # JSON file path
-json_file_path=/home/ashesh/PhD_work/MeepSAT/examples/simple_single_lens_ARC/sim_files/simple_single_lens_ARC.json
+json_file_path=/home/ashesh/PhD_work/MeepSAT/examples/time-reverse/simple_single_lens_ARC/sim_files/simple_single_lens_ARC.json
 
 # Define resolution range
 resolutions=(12) #20)  # Add your desired resolutions here

@@ -486,7 +486,7 @@ class Animate2DArray:
                     shutil.rmtree(self.temp_dir)
                     print(f"Cleaned up temporary directory: {self.temp_dir}")
         else:
-            # Original memory-based approach (existing code)
+            # Frames in memory
             if not self._saved_frames:
                 print("ERROR: No frames to save!")
                 return
@@ -613,7 +613,7 @@ def save_animation(sim):
     return
 
 
-@profile
+# @profile
 def E_field_power_dB(sim, component, component_name, func_name=None):
     """
     Generic function to process field power in dB for any field component.
@@ -1200,7 +1200,7 @@ def extract_xyzw(simulation):
         w = w[::downsampling_factor_x, ::downsampling_factor_y]
 
     # Save the xyzw data to an npz compressed file
-    np.savez_compressed(os.path.join(savepath, "xyzw_{0}.npz".format(simulation.meep_time())),
+    np.savez_compressed(os.path.join(savepath, "xyzw.npz"),
                         x_coords=x,
                         y_coords=y,
                         weights=w)
@@ -1296,7 +1296,7 @@ def save_accumulated_fields(simulation):
     """
     global Ex_global, Ey_global, Ez_global, Hx_global, Hy_global, Hz_global, count
     print("Calculating average E and H fields over accumulated timesteps...")
-    
+
     Ex_avg = calculate_average_fields(Ex_global, count)
     del Ex_global
 

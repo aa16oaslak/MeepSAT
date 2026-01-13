@@ -19,7 +19,10 @@ import meepsat.permittivity_components as comp_eps # Importing the components ma
 import meepsat.helpers as exf # Importing the extra functions
 
 
-def calculate_runtime_parameters(source_freq, total_time, points_per_period=10, 
+
+
+
+def calculate_runtime_parameters(source_freq, total_time, animation_timestep, points_per_period=10, 
                                  extraction_offset=10):
     """
     Calculate runtime parameters for MEEP simulation including time step and extraction start time.
@@ -30,6 +33,8 @@ def calculate_runtime_parameters(source_freq, total_time, points_per_period=10,
         Source frequency in MEEP units (GHz)
     total_time : float
         Total simulation time in MEEP time units
+    animation_timestep : float
+        Time interval for animation frames in MEEP time units
     points_per_period : int, optional
         Number of sampling points per wave period (default: 10)
     extraction_offset : float, optional
@@ -55,9 +60,11 @@ def calculate_runtime_parameters(source_freq, total_time, points_per_period=10,
     
     runtime_params = {
         'period': period,
+        'total_time': total_time,
         'dt': dt,
         't0': t0,
-        'points_per_period': points_per_period
+        'points_per_period': points_per_period,
+        'animation_timestep': animation_timestep
     }
     
     print(f"Runtime parameters calculated:")
@@ -65,6 +72,7 @@ def calculate_runtime_parameters(source_freq, total_time, points_per_period=10,
     print(f"  Time step (dt): {dt:.4f} MEEP time units")
     print(f"  Extraction start time (t0): {t0} MEEP time units")
     print(f"  Points per period: {points_per_period}")
+    print(f"  Animation timestep: {animation_timestep} MEEP time units")
     
     return runtime_params
 

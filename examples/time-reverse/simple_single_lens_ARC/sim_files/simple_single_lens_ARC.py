@@ -148,15 +148,16 @@ stepfunctions.set_field_params(field_params= {'size_x': size_x,
                                               'downsampling_factor_y': data["output"]["animation_options"]["downsample_y"]})
 
 #! Runtime parameters
-runtime_params = stepfunctions.calculate_runtime_parameters(
+runtime_params = sim.calculate_runtime_parameters(
     source_freq=float(data["sources"]["source1"]["frequecy"]),
-    total_time=total_time,
+    total_time= runtime,
+    animation_timestep = data["output"]["animation_options"]["image_every"],
     points_per_period=10,
     extraction_offset=10
 )
 
 #~ ---------------------------------------------
-simulation.run(mp.at_every(runtime_params["timestepDuration"], stepfunctions.Ez2_dB),
+simulation.run(mp.at_every(runtime_params["animation_timestep"], stepfunctions.Ez2_dB),
                mp.after_time(runtime_params["t0"], mp.at_every(runtime_params["dt"], stepfunctions.accumulate_efield_and_hfield)),
                mp.at_end(stepfunctions.save_animation),
                mp.at_end(stepfunctions.save_accumulated_fields),
