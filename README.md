@@ -72,7 +72,8 @@ Due to the complex dependencies of the MEEP FDTD software, it is highly recommen
     ```bash
     pip install git+https://'your_token'@github.com/aa16oaslak/MeepSAT.git
     ```
-    Replace ```'your_token' ``` with your PAT token generated in your github account
+    Replace ```'your_token' ``` with your PAT token generated in your github account.
+    For collaborators: If you need a token for the above, please contact the author @ aak25@hi.is
     
     **Alternative for private repository using SSH:**
     ```bash
