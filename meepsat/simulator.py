@@ -78,7 +78,7 @@ def calculate_runtime_parameters(source_freq, total_time, animation_timestep, po
 
 def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_name, 
                           size_x, size_y, vmin=0.5, vmax=3, cmap='viridis', 
-                          figsize=(8, 4), dpi=300, return_epsilon=False):
+                          figsize=(8, 4), dpi=300, return_epsilon=False, focalplane_x=None):
     """
     Plot and save the epsilon (permittivity) map from a MEEP simulation.
     
@@ -121,6 +121,10 @@ def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_na
     plt.imshow(epsilon.T, interpolation='spline36', cmap=cmap, origin='lower', 
                extent=[-size_x/2, size_x/2, -size_y/2, size_y/2],
                vmin=vmin, vmax=vmax)
+
+    if focalplane_x is not None:
+        plt.axvline(x=focalplane_x, color='red', linestyle='--', label='Focal Plane')
+        plt.legend()
     plt.colorbar(label='Permittivity (ε)')
     plt.xlabel('X (mm)')
     plt.ylabel('Y (mm)')

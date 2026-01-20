@@ -682,13 +682,13 @@ class ApertureStop(object):
         
         # Up block of the aperture stop slab
         size_up = mp.Vector3(self.thick, block_size_y_up + self.y_size_offset[0], 0)  # Fixed: added offset directly to y-component
-        centre_up = mp.Vector3(self.pos_x + self.thick/2,  # Fixed: changed from - to +
+        centre_up = mp.Vector3(self.pos_x + (self.thick/2),  # Fixed: changed from - to +
                             self.diameter/2 + (block_size_y_up + self.y_size_offset[0])/2 + self.y_centre_offset[0],
                             0)
 
         # Down block of the aperture stop slab
         size_down = mp.Vector3(self.thick, block_size_y_down + self.y_size_offset[1], 0)  # Fixed: added offset directly to y-component
-        centre_down = mp.Vector3(self.pos_x + self.thick/2,  # Fixed: changed from - to +
+        centre_down = mp.Vector3(self.pos_x + (self.thick/2),  # Fixed: changed from - to +
                                 -self.diameter/2 - (block_size_y_down + self.y_size_offset[1])/2 + self.y_centre_offset[1],
                                 0)
         
@@ -1995,113 +1995,371 @@ class PyramidalAbsorbers(object):
         return pyramids
     
 
-# ~ FOREBAFFLE CLASS
+# # ~ FOREBAFFLE CLASS
 class Forebaffle(object):
     '''
-    Class defining a triangular forebaffle structure.
+    Class defining a triangular forebaffle structure, adjusts the size of the cells and source based on the angle of the forebaffle to ensure proper geometry.
     '''
     def __init__(self,
-                 mpsat_sim,
-                 angle_degrees=30,
-                 x_vertex=None,
-                 y_vertex=None,
-                 leg1_length=40,
-                 leg2_length=70,
-                 height=30,
-                 material=None,
-                 epsilon=5.4,
-                 epsilon_imag=0,
-                 freq=1/3,
-                 name=None):
+                 window_diameter,
+                 cell_size,
+                 source_center,
+                 source_size,
+                 window_lens1_distance,
+                 cellx_sourcex_distance,
+                 sourcex_FB_vertex_distance,
+                 optics_tube_length,
+                 boundary_thickness,
+                 fb_angle_degrees,
+                 fb_hypotenuse,
+                 fb_location,
+                 fb_material=mp.perfect_electric_conductor,
+                 fb_epsilon_real=5.4,
+                 fb_epsilon_imag=0.0,
+                ):
         '''
         Defines a triangular forebaffle structure with a specific angle
-
         Parameters
         ----------
-        mpsat_sim : MEEPSAT
-            MEEPSAT simulation object
-        angle_degrees : float, optional
-            Angle of the forebaffle in degrees (default: 30)
-        x_vertex : float, optional
-            X-coordinate of the vertex (default: -300)
-        y_vertex : float, optional
-            Y-coordinate of the vertex (default: bottom of simulation cell)
-        leg1_length : float, optional
-            Length of the first (horizontal) leg (default: 40)
-        leg2_length : float, optional
-            Length of the second (angled) leg (default: 70)
-        height : float, optional
-            Height of the forebaffle in z-direction (default: 30)
-        material : mp.Medium, optional
-            Material for the forebaffle (overrides epsilon if provided)
-        epsilon : float, optional
-            Permittivity of the material (default: 5.4)
-        epsilon_imag : float, optional
-            Imaginary part of permittivity (default: 0)
-        freq : float, optional
-            Frequency for material properties (default: 1/3)
-        name : str, optional
-            Name of the object (default: None)
+        window_diameter : float
+            Diameter of the window after the forebaffle
+        cell_size : float
+            Size of the simulation cell
+        source_center : float
+            Center position of the source
+        source_size : float
+            Size of the source
+        window_lens1_distance : float
+            Distance from the left surface of the window to the left surface of lens 1
+        cellx_sourcex_distance : float
+            Distance from the left edge of the cell to the left edge of the source
+        sourcex_FB_vertex_distance : float
+            Distance from the left edge of the source to the vertex of the forebaffle
+        optics_tube_length : float
+            Length of the optics tube
+        boundary_thickness : list [Xlow, Xhigh, Ylow, Yhigh]
+            Thickness of the simulation boundaries
+        fb_angle_degrees : float
+            Angle of the forebaffle in degrees
+        fb_hypotenuse : float
+            Length of the hypotenuse of the forebaffle triangle
+        fb_location: str
+            Type of forebaffle location, options are 'up' and 'down'
+        fb_material : mp.Medium
+            Material for the forebaffle
+        fb_epsilon_real : float
+            Real part of permittivity for the forebaffle material
+        fb_epsilon_imag : float
+            Imaginary part of permittivity for the forebaffle material
         '''
-        # Sims object
-        self.mpsat_sim = set_sims_obj(self, mpsat_sim)
+        self.window_diameter = window_diameter
+        self.cell_size = cell_size
+        self.source_center = source_center
+        self.source_size = source_size
+        self.window_lens1_distance = window_lens1_distance
+        self.cellx_sourcex_distance = cellx_sourcex_distance
+        self.sourcex_FB_vertex_distance = sourcex_FB_vertex_distance
+        self.optics_tube_length = optics_tube_length
+        self.fb_angle_degrees = fb_angle_degrees
+        self.fb_angle_radians = np.radians(fb_angle_degrees)
+        self.fb_hypotenuse = fb_hypotenuse
         
-        # Basic parameters
-        self.name = name if name else "Forebaffle"
-        self.object_type = 'Forebaffle'
-        
-        # Geometry parameters
-        self.angle_degrees = angle_degrees
-        self.angle_radians = np.radians(angle_degrees)
-        self.x_vertex = x_vertex if x_vertex is not None else -300
-        self.y_vertex = y_vertex if y_vertex is not None else -self.mpsat_sim.cell_size[1]/2
-        self.leg1_length = leg1_length
-        self.leg2_length = leg2_length
-        self.height = height
-        
-        # Material properties
-        if material is not None:
-            self.material = material
-        else:
-            # Check if imaginary part is provided
-            if epsilon_imag != 0:
-                self.epsilon_real = epsilon
-                self.epsilon_imag = epsilon_imag
-                self.conductivity = epsilon_imag * 2 * np.pi * freq / epsilon
-                self.material = mp.Medium(epsilon=epsilon, D_conductivity=self.conductivity)
-            else:
-                self.material = mp.Medium(epsilon=epsilon)
-            
-        print(f"Forebaffle created: angle={self.angle_degrees}°, "
-              f"position=({self.x_vertex}, {self.y_vertex}), "
-              f"legs=({self.leg1_length}, {self.leg2_length})")
+        # Calculate the expected height of the forebaffle based on the angle and hypotenuse
+        self.fb_height = np.abs(self.fb_hypotenuse * np.sin(self.fb_angle_radians))
 
-    def __str__(self):
-        return f"{self.name}: angle={self.angle_degrees}°, height={self.height}"
+        # Calculate the base length of the forebaffle
+        self.fb_base_length = np.sqrt(self.fb_hypotenuse**2 - self.fb_height**2)
+
+        # Adjust the cell size based on the forebaffle dimensions
+        self.adjusted_cell_size = (boundary_thickness[0] + self.cellx_sourcex_distance + self.sourcex_FB_vertex_distance + self.fb_base_length + self.optics_tube_length + boundary_thickness[1],
+                                   2*self.fb_height + window_diameter + boundary_thickness[2] + boundary_thickness[3],              
+                                   0)
+
+        # Calculate the adjustments on the centre of Source
+        self.source_center_adjusted = (- self.adjusted_cell_size[0]/2 + boundary_thickness[0] + self.cellx_sourcex_distance, 
+                                       0,
+                                       0)
+        
+        # Calculate the size of the source based on the new cell size and forebaffle parameters
+        self.source_size_adjusted = (self.adjusted_cell_size[0] - boundary_thickness[0] - boundary_thickness[1],
+                                     self.adjusted_cell_size[1] - boundary_thickness[2] - boundary_thickness[3],
+                                        0)
+        
+
+        if fb_location == 'down':
+            # Calculate the vertex A of the forebaffle
+            self.fb_vertex_A = (self.source_center_adjusted[0] + self.sourcex_FB_vertex_distance,
+                                -self.adjusted_cell_size[1]/2 + boundary_thickness[2],
+                                0)
+
+
+            # Calculate the Vertex B of the forebaffle
+            self.fb_vertex_B = (self.fb_vertex_A[0] + self.fb_base_length,
+                                self.fb_vertex_A[1] + self.fb_height,
+                                0)
+
+            # Calculate the Vertex C of the forebaffle
+            self.fb_vertex_C = (self.fb_vertex_A[0] + self.fb_base_length,
+                                self.fb_vertex_A[1],
+                                0)
+            
+            #! NEED TO MAKE THE HEIGHT CONSTANT REGARDLESS OF ANGLE by increasing OR decreasing the size of the cell and shifting the forebaffle accordingly so theyintersect at -window_diameter/2
+            # Check if the Vertex B exceeds or short of the window_diameter/2
+            if self.fb_vertex_B[1] > -(self.window_diameter/2):
+                diff = self.fb_vertex_B[1] - (self.window_diameter/2)
+                # Adjust the cell size, source size, and vertex positions accordingly
+                self.adjusted_cell_size = (self.adjusted_cell_size[0],
+                                           self.adjusted_cell_size[1] - diff,
+                                             0)
+                self.source_size_adjusted = (self.source_size_adjusted[0],
+                                            self.source_size_adjusted[1] - diff,
+                                                0)
+                
+                self.fb_vertex_A = (self.fb_vertex_A[0],
+                                    self.fb_vertex_A[1] - diff,
+                                    0)
+                self.fb_vertex_B = (self.fb_vertex_B[0],
+                                    self.fb_vertex_B[1] - diff,
+                                    0)
+                self.fb_vertex_C = (self.fb_vertex_C[0],
+                                    self.fb_vertex_C[1] - diff,
+                                    0)
+                
+            elif self.fb_vertex_B[1] < -(self.window_diameter/2):
+                diff = -(self.window_diameter/2) - self.fb_vertex_B[1]
+                # Adjust the cell size, source size, and vertex positions accordingly
+                self.adjusted_cell_size = (self.adjusted_cell_size[0],
+                                           self.adjusted_cell_size[1] + diff,
+                                             0)
+                self.source_size_adjusted = (self.source_size_adjusted[0],
+                                            self.source_size_adjusted[1] + diff,
+                                                0)
+                self.fb_vertex_A = (self.fb_vertex_A[0],
+                                    self.fb_vertex_A[1] + diff,
+                                    0)
+                self.fb_vertex_B = (self.fb_vertex_B[0],
+                                    self.fb_vertex_B[1] + diff,
+                                    0)
+                self.fb_vertex_C = (self.fb_vertex_C[0],
+                                    self.fb_vertex_C[1] + diff,
+                                    0)
+
+        elif fb_location == 'up':
+            # Calculate the vertex A of the forebaffle
+            self.fb_vertex_A = (self.source_center_adjusted[0] + self.sourcex_FB_vertex_distance,
+                                self.adjusted_cell_size[1]/2 - boundary_thickness[3],
+                                0)
+
+
+            # Calculate the Vertex B of the forebaffle
+            self.fb_vertex_B = (self.fb_vertex_A[0] + self.fb_base_length,
+                                self.fb_vertex_A[1] - self.fb_height,
+                                0)
+            # Calculate the Vertex C of the forebaffle
+            self.fb_vertex_C = (self.fb_vertex_A[0] + self.fb_base_length,
+                                self.fb_vertex_A[1],
+                                0)
+            
+            #! NEED TO MAKE THE HEIGHT CONSTANT REGARDLESS OF ANGLE by increasing OR decreasing the size of the cell and shifting the forebaffle accordingly so theyintersect at +window_diameter/2
+            # Check if the Vertex B exceeds or short of the window_diameter/2
+            if self.fb_vertex_B[1] < (self.window_diameter/2):
+                diff = (self.window_diameter/2) - self.fb_vertex_B[1]
+                # Adjust the cell size, source size, and vertex positions accordingly
+                self.adjusted_cell_size = (self.adjusted_cell_size[0],
+                                           self.adjusted_cell_size[1] + diff,
+                                                0)
+                
+                self.source_size_adjusted = (self.source_size_adjusted[0],
+                                            self.source_size_adjusted[1] + diff,
+                                                0)
+                self.fb_vertex_A = (self.fb_vertex_A[0],
+                                    self.fb_vertex_A[1] + diff,
+                                    0)
+                
+                self.fb_vertex_B = (self.fb_vertex_B[0],
+                                    self.fb_vertex_B[1] + diff,
+                                    0)
+                self.fb_vertex_C = (self.fb_vertex_C[0],
+                                    self.fb_vertex_C[1] + diff,
+                                    0)
+                
+            elif self.fb_vertex_B[1] > (self.window_diameter/2):
+                diff = self.fb_vertex_B[1] - (self.window_diameter/2)
+                # Adjust the cell size, source size, and vertex positions accordingly
+                self.adjusted_cell_size = (self.adjusted_cell_size[0],
+                                           self.adjusted_cell_size[1] - diff,
+                                                0)
+                
+                self.source_size_adjusted = (self.source_size_adjusted[0],
+                                            self.source_size_adjusted[1] - diff,
+                                                0)
+                self.fb_vertex_A = (self.fb_vertex_A[0],
+                                    self.fb_vertex_A[1] - diff,
+                                    0)
+                self.fb_vertex_B = (self.fb_vertex_B[0],
+                                    self.fb_vertex_B[1] - diff,
+                                    0)
+                self.fb_vertex_C = (self.fb_vertex_C[0],
+                                    self.fb_vertex_C[1] - diff,
+                                    0)
+        else:
+            raise ValueError("fb_location must be either 'up' or 'down'")
+
+        #Set the material for the forebaffle
+        if fb_material is not None:
+            self.material = fb_material
+        else:
+            if fb_epsilon_imag != 0:
+                self.epsilon_real = fb_epsilon_real
+                self.epsilon_imag = fb_epsilon_imag
+                self.conductivity = fb_epsilon_imag * 2 * np.pi * (1/3) / fb_epsilon_real
+                self.material = mp.Medium(epsilon=fb_epsilon_real, D_conductivity=self.conductivity)
+            else:
+                self.material = mp.Medium(epsilon=fb_epsilon_real)
+
+        # Print forebaffle creation details
+        print(f"Forebaffle created at angle={self.fb_angle_degrees}°, "
+              f"hypotenuse={self.fb_hypotenuse}, "
+              f"base_length={self.fb_base_length}, height={self.fb_height}",
+              f"At vertices: A{self.fb_vertex_A}, B{self.fb_vertex_B}, C{self.fb_vertex_C}")
 
     def assemble(self):
         """
-        Assemble the forebaffle prism
-        
+        Assemble the forebaffle triangle
+
         Returns
         -------
         mp.Prism
             Meep prism object representing the forebaffle
         """
-        # Calculate the coordinates of the three vertices
-        v1 = mp.Vector3(self.x_vertex, self.y_vertex)  # Vertex where angle is measured
-        v2 = mp.Vector3(self.x_vertex + self.leg1_length, self.y_vertex)  # End of first leg (horizontal)
-        v3 = mp.Vector3(self.x_vertex + self.leg2_length * np.cos(self.angle_radians),
-                      self.y_vertex + self.leg2_length * np.sin(self.angle_radians))  # End of second leg
-        
         # Create the prism
         forebaffle = mp.Prism(
-            vertices=[v1, v2, v3],
-            height=self.height,
+            vertices=[mp.Vector3(*self.fb_vertex_A),
+                      mp.Vector3(*self.fb_vertex_B),
+                      mp.Vector3(*self.fb_vertex_C)],
+            height=mp.inf,
             axis=mp.Vector3(0, 0, 1),
-            material=self.material
+            material = self.material
         )
+
+        print(f"Forebaffle assembled with vertices at {self.fb_vertex_A}, {self.fb_vertex_B}, and {self.fb_vertex_C}")
+        print(f"Adjusted cell size: {self.adjusted_cell_size}")
+        print(f"Adjusted source center: {self.source_center_adjusted}")
+        print(f"Adjusted source size: {self.source_size_adjusted}")
         
-        print(f"Forebaffle assembled with vertices at {v1}, {v2}, and {v3}")
+        # Calculate AB length for verification
+        AB_length = np.sqrt((self.fb_vertex_B[0] - self.fb_vertex_A[0])**2 + (self.fb_vertex_B[1] - self.fb_vertex_A[1])**2)
+        print(f"Forebaffle AB length: {AB_length}, Expected hypotenuse: {self.fb_hypotenuse}")
+
+        return forebaffle, self.adjusted_cell_size, self.source_center_adjusted, self.source_size_adjusted, self.fb_base_length, self.fb_height, self.fb_vertex_A, self.fb_vertex_B, self.fb_vertex_C
+
+
+# class Forebaffle(object):
+#     '''
+#     Class defining a triangular forebaffle structure.
+#     '''
+#     def __init__(self,
+#                  mpsat_sim,
+#                  angle_degrees=30,
+#                  x_vertex=None,
+#                  y_vertex=None,
+#                  leg1_length=40,
+#                  leg2_length=70,
+#                  height=30,
+#                  material=None,
+#                  epsilon=5.4,
+#                  epsilon_imag=0,
+#                  freq=1/3,
+#                  name=None):
+#         '''
+#         Defines a triangular forebaffle structure with a specific angle
+
+#         Parameters
+#         ----------
+#         mpsat_sim : MEEPSAT
+#             MEEPSAT simulation object
+#         angle_degrees : float, optional
+#             Angle of the forebaffle in degrees (default: 30)
+#         x_vertex : float, optional
+#             X-coordinate of the vertex (default: -300)
+#         y_vertex : float, optional
+#             Y-coordinate of the vertex (default: bottom of simulation cell)
+#         leg1_length : float, optional
+#             Length of the first (horizontal) leg (default: 40)
+#         leg2_length : float, optional
+#             Length of the second (angled) leg (default: 70)
+#         height : float, optional
+#             Height of the forebaffle in z-direction (default: 30)
+#         material : mp.Medium, optional
+#             Material for the forebaffle (overrides epsilon if provided)
+#         epsilon : float, optional
+#             Permittivity of the material (default: 5.4)
+#         epsilon_imag : float, optional
+#             Imaginary part of permittivity (default: 0)
+#         freq : float, optional
+#             Frequency for material properties (default: 1/3)
+#         name : str, optional
+#             Name of the object (default: None)
+#         '''
+#         # Sims object
+#         self.mpsat_sim = set_sims_obj(self, mpsat_sim)
         
-        return forebaffle
+#         # Basic parameters
+#         self.name = name if name else "Forebaffle"
+#         self.object_type = 'Forebaffle'
+        
+#         # Geometry parameters
+#         self.angle_degrees = angle_degrees
+#         self.angle_radians = np.radians(angle_degrees)
+#         self.x_vertex = x_vertex if x_vertex is not None else -300
+#         self.y_vertex = y_vertex if y_vertex is not None else -self.mpsat_sim.cell_size[1]/2
+#         self.leg1_length = leg1_length
+#         self.leg2_length = leg2_length
+#         self.height = height
+        
+#         # Material properties
+#         if material is not None:
+#             self.material = material
+#         else:
+#             # Check if imaginary part is provided
+#             if epsilon_imag != 0:
+#                 self.epsilon_real = epsilon
+#                 self.epsilon_imag = epsilon_imag
+#                 self.conductivity = epsilon_imag * 2 * np.pi * freq / epsilon
+#                 self.material = mp.Medium(epsilon=epsilon, D_conductivity=self.conductivity)
+#             else:
+#                 self.material = mp.Medium(epsilon=epsilon)
+            
+#         print(f"Forebaffle created: angle={self.angle_degrees}°, "
+#               f"position=({self.x_vertex}, {self.y_vertex}), "
+#               f"legs=({self.leg1_length}, {self.leg2_length})")
+
+#     def __str__(self):
+#         return f"{self.name}: angle={self.angle_degrees}°, height={self.height}"
+
+#     def assemble(self):
+#         """
+#         Assemble the forebaffle prism
+        
+#         Returns
+#         -------
+#         mp.Prism
+#             Meep prism object representing the forebaffle
+#         """
+#         # Calculate the coordinates of the three vertices
+#         v1 = mp.Vector3(self.x_vertex, self.y_vertex)  # Vertex where angle is measured
+#         v2 = mp.Vector3(self.x_vertex + self.leg1_length, self.y_vertex)  # End of first leg (horizontal)
+#         v3 = mp.Vector3(self.x_vertex + self.leg2_length * np.cos(self.angle_radians),
+#                       self.y_vertex + self.leg2_length * np.sin(self.angle_radians))  # End of second leg
+        
+#         # Create the prism
+#         forebaffle = mp.Prism(
+#             vertices=[v1, v2, v3],
+#             height=self.height,
+#             axis=mp.Vector3(0, 0, 1),
+#             material=self.material
+#         )
+        
+#         print(f"Forebaffle assembled with vertices at {v1}, {v2}, and {v3}")
+        
+#         return forebaffle
