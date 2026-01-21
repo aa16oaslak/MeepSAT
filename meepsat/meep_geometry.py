@@ -2016,6 +2016,7 @@ class Forebaffle(object):
                  fb_material=mp.perfect_electric_conductor,
                  fb_epsilon_real=5.4,
                  fb_epsilon_imag=0.0,
+                 sim_type= 'TFWD'
                 ):
         '''
         Defines a triangular forebaffle structure with a specific angle
@@ -2050,7 +2051,9 @@ class Forebaffle(object):
         fb_epsilon_real : float
             Real part of permittivity for the forebaffle material
         fb_epsilon_imag : float
-            Imaginary part of permittivity for the forebaffle material
+            Imaginary part of permittivity for the forebaffle material¨
+        sim_type: str
+            Type of simulation (TFWD or TR) - useful for source center
         '''
         self.window_diameter = window_diameter
         self.cell_size = cell_size
@@ -2074,7 +2077,7 @@ class Forebaffle(object):
         self.adjusted_cell_size = (boundary_thickness[0] + self.cellx_sourcex_distance + self.sourcex_FB_vertex_distance + self.fb_base_length + self.optics_tube_length + boundary_thickness[1],
                                    2*self.fb_height + window_diameter + boundary_thickness[2] + boundary_thickness[3],              
                                    0)
-
+    
         # Calculate the adjustments on the centre of Source
         self.source_center_adjusted = (- self.adjusted_cell_size[0]/2 + boundary_thickness[0] + self.cellx_sourcex_distance, 
                                        0,
