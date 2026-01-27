@@ -1750,3 +1750,390 @@ class AsphericLens(object):
         # Return both the permittivity map and the stepped pyramid blocks
         return self.permittivity_map, self.stepped_pyramid_blocks
             
+
+#~ Feedhorn class
+class FeedHorn(object):
+    """
+    Class defining an FeedHorn from a txt file containing the geometry information about
+    the Horn in r vs z.
+    """
+    def __init__(self,
+                 mpsat_sim,
+                 eps,
+                 focal_plane_x,
+                 focal_plane_y_range,
+                 # Feedhorn params
+                 txt_file,
+                 t_m,
+                 t_f,
+                 w2,
+                 thick_x,
+                 savepath,
+                 plot = False,
+                 eps_pec = -1e-10,
+                 eps_air = 1,
+                 central_metal_thickness = 0
+                 ):
+    
+        """
+        Arguments
+        ---------
+        mpsat_sim: object
+            MEEPSAT object produced from sim_init() in simulation_2D.py
+        
+        eps: np.array
+            Dielectric map of the other components in the system 
+        
+        focal_plane_x: float
+            X-coordinate of the focal plane
+        
+        focal_plane_y_range: tuple
+            Y-coordinate range of the focal plane
+
+        txt_file: str
+            path to the text file containing the geometry information about
+            the Horn in r vs z.
+
+        t_m: float
+            Thickness of the metal gap of the two consecutive apertures 
+
+        t_f: float
+            Gap between the centers of the two feedhorns
+
+        w2: float
+            Feedhorn's aperture width
+
+        thick_x: float
+            Total extent of the feedhorn in the X-axis
+
+        savepath: str
+            savepath for the generated plots and the data files 
+
+        plot: bool
+            Whether to generate plots 
+
+        eps_pec: float
+            Permittivity of the perfect electric conductor (PEC)
+
+        eps_air: float
+            Permittivity of air
+
+        central_metal_thickness: float, optional
+        Thickness of the central metal layer separating feedhorn arrays
+        (default: 0)
+
+        """
+
+        self.mpsat_sim = mpsat_sim
+        self.eps = eps
+        self.focal_plane_y_range = focal_plane_y_range
+        self.txt_file = txt_file
+        self.t_m = t_m
+        self.t_f = t_f
+        self.w2 = w2
+        self.thick_x = thick_x
+        self.savepath = savepath
+        self.plot = plot
+        self.eps_pec = eps_pec
+        self.eps_air = eps_air
+        self.central_metal_thickness = central_metal_thickness
+
+        self.focal_plane_x = focal_plane_x + thick_x #! Because we want the forebaffles opening aperture at the focal plane
+
+        # Extract some parameters from mpsat_sim
+        self.sx = mpsat_sim.cell_size[0]
+        self.sy = mpsat_sim.cell_size[1]
+        self.res = mpsat_sim.resolution
+        
+        
+
+    def load_txt_dat(self):
+        import pandas as pd
+        self.data = pd.read_csv(self.txt_file, sep=r'\s+')  # Fixed regex warning
+        self.data['r_pos'] = self.data['r']*10
+        self.data['r_neg'] = -self.data['r_pos']
+        self.cumulative_z = np.cumsum(self.data['z']*10)
+
+        if self.plot == True:
+            plt.figure(figsize=(10, 6))
+            plt.plot(self.cumulative_z, self.data['r_pos'])
+            plt.plot(self.cumulative_z, self.data['r_neg'])
+            plt.xlabel('z (mm)')
+            plt.ylabel('r (mm)')
+            plt.title('z vs r')
+            plt.grid(True)
+            plt.savefig(self.savepath + 'step1_z_column_plot.png')
+            plt.close()
+
+        return self.data
+    
+    
+
+    def fit_spline_to_dat(self, s_factor=0, no_points=1000):
+        from scipy.interpolate import UnivariateSpline
+        r_pos_spline = UnivariateSpline(self.cumulative_z, self.data['r_pos'], s=s_factor) 
+        r_neg_spline = UnivariateSpline(self.cumulative_z, self.data['r_neg'], s=s_factor)
+        
+        # Fit the spline
+        z_new = np.linspace(self.cumulative_z.min(), self.cumulative_z.max(), no_points)
+        r_pos_fitted = r_pos_spline(z_new)
+        r_neg_fitted = r_neg_spline(z_new)
+
+        if self.plot == True:
+            plt.figure(figsize=(10, 6))
+            plt.plot(z_new, r_pos_fitted, label='Fitted r_pos')
+            plt.plot(z_new, r_neg_fitted, label='Fitted r_neg')
+            plt.xlabel('z (mm)')
+            plt.ylabel('r (mm)')
+            plt.title('Fitted splines over original data')
+            plt.legend()
+            plt.grid(True)
+            plt.savefig(self.savepath + 'step2_fitted_splines_plot.png')
+            plt.close()
+
+        return r_pos_spline, r_neg_spline
+
+
+
+    def create_coordinate_grids(self):
+        """Create x, y coordinate arrays for the grid"""
+        # Match the epsilon map dimensions which have +1
+        self.x = np.linspace(-self.sx/2, self.sx/2, int(self.sx * self.res) + 1)
+        self.y = np.linspace(-self.sy/2, self.sy/2, int(self.sy * self.res) + 1)
+        return self.x, self.y
+
+    def define_focal_plane_axis(self):
+        """Create the focal plane axis array"""
+        self.focal_plane_axis = np.linspace(
+            self.focal_plane_y_range[0], 
+            self.focal_plane_y_range[1], 
+            int((self.focal_plane_y_range[1] - self.focal_plane_y_range[0]) * self.res)
+        )
+        return self.focal_plane_axis
+
+    def fill_pec_region(self):
+        """Fill the focal plane region with PEC - VECTORIZED"""
+        x, y = self.create_coordinate_grids()
+        
+        # Create meshgrid - use indexing='ij' to match epsilon array dimensions
+        # epsilon array is (len(x), len(y)), so X varies along axis 0, Y along axis 1
+        X, Y = np.meshgrid(x, y, indexing='ij')
+        
+        # Create boolean mask for PEC region
+        mask_pec = ((X <= self.focal_plane_x) & 
+                    (X >= (self.focal_plane_x - self.thick_x)) & 
+                    (Y >= self.focal_plane_y_range[0]) & 
+                    (Y <= self.focal_plane_y_range[1]))
+        
+        # Apply the mask
+        self.eps[mask_pec] = self.eps_pec
+
+
+    def calculate_feedhorn_centers(self):
+        """Calculate feedhorn center positions with central metal layer offset"""
+        # Adjust for central metal thickness
+        n_feedhorns_positive = int(np.floor((self.focal_plane_y_range[1] - self.central_metal_thickness/2) / self.t_f)) + 1
+        n_feedhorns_negative = int(np.floor((abs(self.focal_plane_y_range[0]) - self.central_metal_thickness/2) / self.t_f)) + 1
+        
+        # Create feedhorn centers: offset from zero by central_metal_thickness/2
+        feedhorn_centers_positive = (np.arange(0, n_feedhorns_positive) * self.t_f) + self.central_metal_thickness/2
+        feedhorn_centers_negative = -(np.arange(0, n_feedhorns_negative) * self.t_f) - self.central_metal_thickness/2
+        self.feedhorn_centers = np.sort(np.concatenate([feedhorn_centers_negative, feedhorn_centers_positive]))
+        
+        print(f"Number of feedhorns: {len(self.feedhorn_centers)}")
+        print(f"Feedhorn centers: {self.feedhorn_centers}")
+        
+        return self.feedhorn_centers
+
+
+    def fill_feedhorn_profiles(self, r_pos_spline, r_neg_spline):
+        """Fill air inside feedhorns using spline functions - VECTORIZED"""
+        x, y = self.create_coordinate_grids()
+        
+        # Create meshgrid - use indexing='ij' to match epsilon array dimensions
+        X, Y = np.meshgrid(x, y, indexing='ij')
+        
+        # Mask for x within feedhorn extent
+        mask_x = (X <= self.focal_plane_x) & (X >= (self.focal_plane_x - self.cumulative_z.max()))
+        
+        # Calculate z position for all grid points
+        z_pos = self.focal_plane_x - X
+        
+        # Mask for valid z positions
+        mask_z = (z_pos >= 0) & (z_pos <= self.cumulative_z.max())
+        
+        # Combine masks
+        mask_region = mask_x & mask_z
+        
+        # Get the radial bounds at each z position (vectorized spline evaluation)
+        # Only evaluate where mask_region is True
+        z_pos_valid = z_pos[mask_region]
+        r_upper_valid = r_pos_spline(z_pos_valid)
+        r_lower_valid = r_neg_spline(z_pos_valid)
+        
+        # For each feedhorn center, check if points are inside
+        for centre in self.feedhorn_centers:
+            # Calculate y distance from feedhorn center for the entire grid
+            y_dist = Y - centre
+            
+            # Create temporary arrays for r_upper and r_lower for the full grid
+            r_upper_grid = np.full_like(X, np.nan)
+            r_lower_grid = np.full_like(X, np.nan)
+            
+            # Fill in the valid regions
+            r_upper_grid[mask_region] = r_upper_valid
+            r_lower_grid[mask_region] = r_lower_valid
+            
+            # Check if points are inside this feedhorn
+            mask_feedhorn = mask_region & (y_dist >= r_lower_grid) & (y_dist <= r_upper_grid)
+            
+            # Fill with air
+            self.eps[mask_feedhorn] = self.eps_air
+
+    def fill_central_metal_layer(self):
+        """Fill the central metal layer with PEC"""
+        if self.central_metal_thickness <= 0:
+            return
+            
+        x, y = self.create_coordinate_grids()
+        
+        # Create meshgrid
+        X, Y = np.meshgrid(x, y, indexing='ij')
+        
+        # Mask for central metal region
+        mask_central_metal = ((X <= self.focal_plane_x) & 
+                            (X >= (self.focal_plane_x - self.thick_x)) & 
+                            (Y >= -self.central_metal_thickness/2) & 
+                            (Y <= self.central_metal_thickness/2))
+        
+        # Fill with PEC
+        self.eps[mask_central_metal] = self.eps_pec
+
+    
+    def plot_focal_plane(self):
+        """Plot the simulation grid with focal plane axis"""
+        if not self.plot:
+            return
+            
+        x, y = self.create_coordinate_grids()
+        focal_plane_axis = self.define_focal_plane_axis()
+        
+        # Create meshgrid for plotting
+        X, Y = np.meshgrid(x, y, indexing='ij')
+        
+        plt.figure(figsize=(10, 8))
+        plt.pcolormesh(X, Y, np.ones_like(X), cmap='gray', alpha=0.3, shading='auto')
+        plt.plot(np.full_like(focal_plane_axis, self.focal_plane_x), focal_plane_axis, 
+                'r-', linewidth=2, label='Focal plane axis')
+        plt.xlabel('x (mm)')
+        plt.ylabel('y (mm)')
+        plt.title('Simulation Grid with Focal Plane')
+        plt.legend()
+        plt.grid(True)
+        plt.axis('equal')
+        plt.savefig(self.savepath + 'step3_focal_plane_plot.png')
+        plt.close()
+
+
+    def plot_pec_region(self):
+        """Plot the simulation grid with PEC region filled"""
+        if not self.plot:
+            return
+            
+        x, y = self.create_coordinate_grids()
+        focal_plane_axis = self.define_focal_plane_axis()
+        
+        plt.figure(figsize=(10, 8))
+        plt.pcolormesh(x, y, self.eps.T, cmap='RdBu', shading='auto', vmin=-0.2, vmax=1)
+        plt.plot(np.full_like(focal_plane_axis, self.focal_plane_x), focal_plane_axis, 
+                'r-', linewidth=2, label='Focal plane axis')
+        plt.xlabel('x (mm)')
+        plt.ylabel('y (mm)')
+        plt.title('Simulation Grid with PEC Region')
+        plt.colorbar(label='Epsilon')
+        plt.legend()
+        plt.grid(True)
+        plt.axis('equal')
+        plt.savefig(self.savepath + 'step3b_focal_plane_with_PEC.png')
+        plt.close()
+
+
+    def plot_feedhorn_centers(self):
+        """Plot feedhorn centers on the focal plane"""
+        if not self.plot:
+            return
+            
+        x, y = self.create_coordinate_grids()
+        focal_plane_axis = self.define_focal_plane_axis()
+        
+        plt.figure(figsize=(10, 8))
+        plt.pcolormesh(x, y, self.eps.T, cmap='RdBu', alpha=0.3, shading='auto', vmin=-0.2, vmax=1)
+        plt.plot(np.full_like(focal_plane_axis, self.focal_plane_x), focal_plane_axis, 
+                'r-', linewidth=2, label='Focal plane axis')
+        
+        # Draw each feedhorn as a circle
+        for center in self.feedhorn_centers:
+            circle = plt.Circle((self.focal_plane_x, center), self.w2/2, 
+                            color='blue', fill=False, linewidth=2)
+            plt.gca().add_patch(circle)
+            plt.plot(self.focal_plane_x, center, 'bo', markersize=5)
+        
+        plt.xlabel('x (mm)')
+        plt.ylabel('y (mm)')
+        plt.title('Simulation Grid with Focal Plane and Feedhorns')
+        plt.legend()
+        plt.grid(True)
+        plt.axis('equal')
+        plt.savefig(self.savepath + 'step4_focal_plane_with_feedhorns_plot.png')
+        plt.close()
+
+
+    def plot_final_geometry(self):
+        """Plot the final feedhorn geometry with all profiles filled"""
+        if not self.plot:
+            return
+            
+        x, y = self.create_coordinate_grids()
+        
+        plt.figure(figsize=(12, 10))
+        plt.pcolormesh(x, y, self.eps.T, cmap='RdBu', shading='auto', vmin=-0.2, vmax=1)
+        plt.xlabel('x (mm)')
+        plt.ylabel('y (mm)')
+        plt.title('Simulation Grid with Feedhorns (Air-filled)')
+        plt.colorbar(label='Epsilon')
+        plt.grid(True)
+        plt.axis('equal')
+        plt.savefig(self.savepath + 'step5_feedhorns_with_profiles.png')
+        plt.close()
+
+    def assemble(self):
+        """Assemble the complete feedhorn geometry"""
+        # Load and fit data
+        self.load_txt_dat()
+        
+        # Plot step 3a: focal plane
+        self.plot_focal_plane()
+        
+        # Get splines from fit_spline_to_dat
+        r_pos_spline, r_neg_spline = self.fit_spline_to_dat()
+        
+        # Fill regions
+        self.fill_pec_region()
+        
+        # Fill central metal layer (if thickness > 0)
+        # self.fill_central_metal_layer()
+        
+        # Plot step 3b: PEC region
+        self.plot_pec_region()
+        
+        self.calculate_feedhorn_centers()
+        
+        # Plot step 4: feedhorn centers
+        self.plot_feedhorn_centers()
+        
+        self.fill_feedhorn_profiles(r_pos_spline, r_neg_spline)
+        
+        # Plot step 5: final geometry
+        self.plot_final_geometry()
+        
+        return self.eps

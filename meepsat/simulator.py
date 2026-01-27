@@ -78,7 +78,8 @@ def calculate_runtime_parameters(source_freq, total_time, animation_timestep, po
 
 def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_name, 
                           size_x, size_y, vmin=0.5, vmax=3, cmap='viridis', 
-                          figsize=(8, 4), dpi=300, return_epsilon=False, focalplane_x=None):
+                          figsize=(8, 4), dpi=300, return_epsilon=False, focalplane_x=None,
+                          plot_pml=True, pml_thickness=None, pml_color='red', pml_alpha=0.2):
     """
     Plot and save the epsilon (permittivity) map from a MEEP simulation.
     
@@ -106,29 +107,72 @@ def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_na
         Figure size (width, height) in inches (default: (8, 4))
     dpi : int, optional
         Resolution for saved figure (default: 300)
+    plot_pml : bool, optional
+        Whether to plot PML boundary layers (default: True)
+    pml_thickness : float, optional
+        Thickness of PML layers. If None, extracted from simulation
+    pml_color : str, optional
+        Color for PML regions (default: 'red')
+    pml_alpha : float, optional
+        Transparency of PML regions (default: 0.2)
+    focalplane_x : float, optional
+        X-coordinate of focal plane to mark (default: None)
+    return_epsilon : bool, optional
+        Whether to return the epsilon array (default: False)
     
     Returns:
     --------
-    epsilon : np.ndarray
-        The extracted epsilon array
+    epsilon : np.ndarray (optional)
+        The extracted epsilon array if return_epsilon=True
     """
     # Run simulation briefly to get epsilon
     simulation.run(until=0)
     epsilon = simulation.get_epsilon()
     
+    # Extract PML thickness if not provided
+    if plot_pml and pml_thickness is None:
+        # Try to get PML thickness from simulation
+        if hasattr(simulation, 'boundary_layers') and simulation.boundary_layers:
+            pml_thickness = simulation.boundary_layers[0].thickness
+        else:
+            print("Warning: Could not determine PML thickness. Set plot_pml=False or provide pml_thickness.")
+            plot_pml = False
+    
     # Plot the epsilon map geometry
-    plt.figure(figsize=figsize)
-    plt.imshow(epsilon.T, interpolation='spline36', cmap=cmap, origin='lower', 
-               extent=[-size_x/2, size_x/2, -size_y/2, size_y/2],
-               vmin=vmin, vmax=vmax)
-
+    fig, ax = plt.subplots(figsize=figsize)
+    im = ax.imshow(epsilon.T, interpolation='spline36', cmap=cmap, origin='lower', 
+                   extent=[-size_x/2, size_x/2, -size_y/2, size_y/2],
+                   vmin=vmin, vmax=vmax)
+    
+    # Plot PML boundary layers
+    if plot_pml and pml_thickness is not None:
+        # Left PML
+        ax.axvspan(-size_x/2, -size_x/2 + pml_thickness, 
+                   alpha=pml_alpha, color=pml_color, label='PML', zorder=10)
+        # Right PML
+        ax.axvspan(size_x/2 - pml_thickness, size_x/2, 
+                   alpha=pml_alpha, color=pml_color, zorder=10)
+        # Bottom PML
+        ax.axhspan(-size_y/2, -size_y/2 + pml_thickness, 
+                   alpha=pml_alpha, color=pml_color, zorder=10)
+        # Top PML
+        ax.axhspan(size_y/2 - pml_thickness, size_y/2, 
+                   alpha=pml_alpha, color=pml_color, zorder=10)
+    
+    # Plot focal plane if provided
     if focalplane_x is not None:
-        plt.axvline(x=focalplane_x, color='red', linestyle='--', label='Focal Plane')
-        plt.legend()
-    plt.colorbar(label='Permittivity (ε)')
-    plt.xlabel('X (mm)')
-    plt.ylabel('Y (mm)')
-    plt.title('Epsilon Map')
+        ax.axvline(x=focalplane_x, color='blue', linestyle='--', 
+                   linewidth=2, label='Focal Plane')
+    
+    # Add legend if there are labeled elements
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(loc='upper right')
+    
+    plt.colorbar(im, ax=ax, label='Permittivity (ε)')
+    ax.set_xlabel('X (mm)')
+    ax.set_ylabel('Y (mm)')
+    ax.set_title('Epsilon Map with Boundary Layers')
     plt.savefig(os.path.join(savepath, f"{filename_prefix}.png"), dpi=dpi, bbox_inches='tight')
     plt.close()
     
