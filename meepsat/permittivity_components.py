@@ -1762,6 +1762,7 @@ class FeedHorn(object):
                  eps,
                  focal_plane_x,
                  focal_plane_y_range,
+                 feedhorn_y_range,
                  # Feedhorn params
                  txt_file,
                  t_m,
@@ -1769,10 +1770,10 @@ class FeedHorn(object):
                  w2,
                  thick_x,
                  savepath,
+                 central_metal_thickness = 0,
                  plot = False,
                  eps_pec = -1e-10,
-                 eps_air = 1,
-                 central_metal_thickness = 0
+                 eps_air = 1
                  ):
     
         """
@@ -1789,6 +1790,9 @@ class FeedHorn(object):
         
         focal_plane_y_range: tuple
             Y-coordinate range of the focal plane
+
+        feedhorn_y_range: tuple
+            Y-coordinate range of the feedhorn distribution on the focal plane
 
         txt_file: str
             path to the text file containing the geometry information about
@@ -1809,6 +1813,9 @@ class FeedHorn(object):
         savepath: str
             savepath for the generated plots and the data files 
 
+        central_metal_thickness: float
+            The thickness of the central metal layer separating feedhorn arrays of different wafers
+
         plot: bool
             Whether to generate plots 
 
@@ -1818,33 +1825,33 @@ class FeedHorn(object):
         eps_air: float
             Permittivity of air
 
-        central_metal_thickness: float, optional
-        Thickness of the central metal layer separating feedhorn arrays
-        (default: 0)
-
         """
 
         self.mpsat_sim = mpsat_sim
         self.eps = eps
         self.focal_plane_y_range = focal_plane_y_range
+        self.feedhorn_y_range = feedhorn_y_range
+
+        # if self.focal_plane_y_range < self.feedhorn_y_range:
+        #     raise(ValueError("focal_plane_y_range must be greater than or equal to feedhorn_y_range"))
+
         self.txt_file = txt_file
         self.t_m = t_m
         self.t_f = t_f
         self.w2 = w2
         self.thick_x = thick_x
+        self.central_metal_thickness = central_metal_thickness
         self.savepath = savepath
         self.plot = plot
         self.eps_pec = eps_pec
         self.eps_air = eps_air
-        self.central_metal_thickness = central_metal_thickness
 
-        self.focal_plane_x = focal_plane_x + thick_x #! Because we want the forebaffles opening aperture at the focal plane
+        self.focal_plane_x = focal_plane_x + thick_x #! Because we want the forebaffles opening aperture at the position of the focal plane
 
         # Extract some parameters from mpsat_sim
         self.sx = mpsat_sim.cell_size[0]
         self.sy = mpsat_sim.cell_size[1]
         self.res = mpsat_sim.resolution
-        
         
 
     def load_txt_dat(self):
@@ -1930,21 +1937,20 @@ class FeedHorn(object):
 
 
     def calculate_feedhorn_centers(self):
-        """Calculate feedhorn center positions with central metal layer offset"""
-        # Adjust for central metal thickness
-        n_feedhorns_positive = int(np.floor((self.focal_plane_y_range[1] - self.central_metal_thickness/2) / self.t_f)) + 1
-        n_feedhorns_negative = int(np.floor((abs(self.focal_plane_y_range[0]) - self.central_metal_thickness/2) / self.t_f)) + 1
+        """Calculate feedhorn center positions"""
+        n_feedhorns_positive = int(np.floor(self.feedhorn_y_range[1] / self.t_f)) + 1
+        n_feedhorns_negative = int(np.floor(abs(self.feedhorn_y_range[0]) / self.t_f))
         
-        # Create feedhorn centers: offset from zero by central_metal_thickness/2
-        feedhorn_centers_positive = (np.arange(0, n_feedhorns_positive) * self.t_f) + self.central_metal_thickness/2
-        feedhorn_centers_negative = -(np.arange(0, n_feedhorns_negative) * self.t_f) - self.central_metal_thickness/2
+        if self.central_metal_thickness == 0:
+            feedhorn_centers_positive = np.arange(0, n_feedhorns_positive) * self.t_f
+            feedhorn_centers_negative = -np.arange(1, n_feedhorns_negative + 1) * self.t_f
+        else:
+            feedhorn_centers_positive = np.arange(self.central_metal_thickness/2, n_feedhorns_positive) * self.t_f
+            feedhorn_centers_negative = -np.arange(self.central_metal_thickness/2, n_feedhorns_negative + 1) * self.t_f
+
         self.feedhorn_centers = np.sort(np.concatenate([feedhorn_centers_negative, feedhorn_centers_positive]))
         
-        print(f"Number of feedhorns: {len(self.feedhorn_centers)}")
-        print(f"Feedhorn centers: {self.feedhorn_centers}")
-        
         return self.feedhorn_centers
-
 
     def fill_feedhorn_profiles(self, r_pos_spline, r_neg_spline):
         """Fill air inside feedhorns using spline functions - VECTORIZED"""
@@ -1989,25 +1995,6 @@ class FeedHorn(object):
             
             # Fill with air
             self.eps[mask_feedhorn] = self.eps_air
-
-    def fill_central_metal_layer(self):
-        """Fill the central metal layer with PEC"""
-        if self.central_metal_thickness <= 0:
-            return
-            
-        x, y = self.create_coordinate_grids()
-        
-        # Create meshgrid
-        X, Y = np.meshgrid(x, y, indexing='ij')
-        
-        # Mask for central metal region
-        mask_central_metal = ((X <= self.focal_plane_x) & 
-                            (X >= (self.focal_plane_x - self.thick_x)) & 
-                            (Y >= -self.central_metal_thickness/2) & 
-                            (Y <= self.central_metal_thickness/2))
-        
-        # Fill with PEC
-        self.eps[mask_central_metal] = self.eps_pec
 
     
     def plot_focal_plane(self):
@@ -2106,6 +2093,42 @@ class FeedHorn(object):
         plt.savefig(self.savepath + 'step5_feedhorns_with_profiles.png')
         plt.close()
 
+    def add_absorbers_to_extra_PEC(self):
+        # # Calculate the remaining length remaining on the PEC layer in the focal plane
+        # extra_layer_negative_side = self.focal_plane_y_range[0] - self.feedhorn_y_range[0]
+        # extra_layer_positive_side = self.focal_plane_y_range[1] - self.feedhorn_y_range[1]
+
+        # absorber_range_y_neg = [self.feedhorn_y_range[0], self.feedhorn_y_range[0]-extra_layer_negative_side]
+        # absorber_range_y_pos = [self.feedhorn_y_range[1], self.feedhorn_y_range[1]+extra_layer_positive_side]
+
+        # import meepsat.meep_geometry as comp_meep
+        # absorbers_y_neg = comp_meep.PyramidalAbsorbers(self.mpsat_sim,
+        #                                  base_width = 6,
+        #                                  height = 9,
+        #                                  n_layers = 70,
+        #                                  top_width = 0.5,
+        #                                  epsilon_real = 5.4,
+        #                                  epsilon_imag = 0.8,
+        #                                  freq = data["sources"]["source1"]["frequecy"],
+        #                                  add_substrate=True,
+        #                                  substrate_thickness=7,#p,
+        #                                  substrate_material=None, # If None, then it will be same as the absorber material
+        #                                  substrate_extends_beyond_pyramids=False,
+        #                                  substrate_extension=1,
+        #                                  y_top_offset=-forebaffle_height +mpsat_sim.dpml*mpsat_sim.factor_dpml,# + 0.35,
+        #                                  y_bottom_offset= +forebaffle_height-mpsat_sim.dpml*mpsat_sim.factor_dpml,# -0.35,
+        #                                 #  num_pyramids = 150,
+        #                                  x_coverage_start = -size_x/2 + cellx_sourcex_distance + sourcex_FB_vertex_distance + forebaffle_base,
+        #                                  x_coverage_end = size_x/2 + 10,# - mpsat_sim.dpml*mpsat_sim.factor_dpml + 1,
+        #                                  add_pec_backing = True,
+        #                                  pec_thickness = forebaffle_height-7, # PEC thickness same as the forebaffle perpendicular height)
+        #                                  pec_extends_beyond_substrate = False,
+        #                                  pec_extension = 1, # pec extends beyond the substrate by 1 mm
+        #                                  name = "absorbers"
+        #                                 )
+        pass
+
+
     def assemble(self):
         """Assemble the complete feedhorn geometry"""
         # Load and fit data
@@ -2120,9 +2143,6 @@ class FeedHorn(object):
         # Fill regions
         self.fill_pec_region()
         
-        # Fill central metal layer (if thickness > 0)
-        # self.fill_central_metal_layer()
-        
         # Plot step 3b: PEC region
         self.plot_pec_region()
         
@@ -2132,6 +2152,9 @@ class FeedHorn(object):
         self.plot_feedhorn_centers()
         
         self.fill_feedhorn_profiles(r_pos_spline, r_neg_spline)
+        
+        # if self.feedhorn_y_range != self.focal_plane_y_range:
+        #     self.add_absorbers_to_extra_PEC()
         
         # Plot step 5: final geometry
         self.plot_final_geometry()

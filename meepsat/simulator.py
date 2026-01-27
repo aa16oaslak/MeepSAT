@@ -192,7 +192,8 @@ def check_resolution_and_pml(data,
                              mpsat_sim,
                              meep_sim = None,
                              smallest_freq: float = None,
-                             highest_n: float = None):
+                             highest_n: float = None,
+                             smallest_length: float = None):
     """
     Function to check if the resolution and pml are sufficient for the simulation
 
@@ -206,6 +207,8 @@ def check_resolution_and_pml(data,
         Highest frequency of the source in meep units
     highest_n : float
         Highest refractive index of the materials in the simulation box
+    smallest_length: float = None
+        Smallest length scale in the simulation box (e.g., smallest feature size)
 
     Returns
     -------
@@ -215,7 +218,13 @@ def check_resolution_and_pml(data,
     if meep_sim is None and highest_n is None:
         raise ValueError("Either the MEEP simulation object or the highest refractive index must be provided to check the resolution and PML thickness.")
 
-
+    #! 0th Step: Check the smallest length scale (wavelength) and convert it into frequency. 
+    if smallest_length is not None:
+        largest_freq = 1/smallest_length
+        if data["simulation"]['primary_params']['resolution'] / largest_freq < 8:
+            warnings.warn(f"Resolution criteria for smallest_length not met. Required at least 8 points per wavelength, but got {data['simulation']['primary_params']['resolution'] / largest_freq}. Increasing resolution.")
+            data["simulation"]['primary_params']['resolution'] = int(largest_freq * 8)
+ 
     #! 1ST step: Extract the highest refractive index from the epsilon data
     if highest_n is None:
         #! 0TH step: Run the simulation to extract the epsilon data
