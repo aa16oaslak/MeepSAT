@@ -9,7 +9,7 @@ import warnings
 import scipy.optimize as sc
 import h5py
 import math
-
+from memory_profiler import profile
 import matplotlib.pyplot as plt
 from matplotlib import rc
 
@@ -1752,11 +1752,13 @@ class AsphericLens(object):
             
 
 #~ Feedhorn class
+#@profile
 class FeedHorn(object):
     """
     Class defining an FeedHorn from a txt file containing the geometry information about
     the Horn in r vs z.
     """
+    #@profile
     def __init__(self,
                  mpsat_sim,
                  eps,
@@ -1853,7 +1855,7 @@ class FeedHorn(object):
         self.sy = mpsat_sim.cell_size[1]
         self.res = mpsat_sim.resolution
         
-
+    #@profile
     def load_txt_dat(self):
         import pandas as pd
         self.data = pd.read_csv(self.txt_file, sep=r'\s+')  # Fixed regex warning
@@ -1875,7 +1877,7 @@ class FeedHorn(object):
         return self.data
     
     
-
+    #@profile
     def fit_spline_to_dat(self, s_factor=0, no_points=1000):
         from scipy.interpolate import UnivariateSpline
         r_pos_spline = UnivariateSpline(self.cumulative_z, self.data['r_pos'], s=s_factor) 
@@ -1901,7 +1903,7 @@ class FeedHorn(object):
         return r_pos_spline, r_neg_spline
 
 
-
+    #@profile
     def create_coordinate_grids(self):
         """Create x, y coordinate arrays for the grid"""
         # Match the epsilon map dimensions which have +1
@@ -1909,6 +1911,7 @@ class FeedHorn(object):
         self.y = np.linspace(-self.sy/2, self.sy/2, int(self.sy * self.res) + 1)
         return self.x, self.y
 
+    #@profile
     def define_focal_plane_axis(self):
         """Create the focal plane axis array"""
         self.focal_plane_axis = np.linspace(
@@ -1918,24 +1921,53 @@ class FeedHorn(object):
         )
         return self.focal_plane_axis
 
+    # #@profile
+    # def fill_pec_region(self):
+    #     """Fill the focal plane region with PEC - VECTORIZED"""
+    #     x, y = self.create_coordinate_grids()
+        
+    #     # Create meshgrid - use indexing='ij' to match epsilon array dimensions
+    #     # epsilon array is (len(x), len(y)), so X varies along axis 0, Y along axis 1
+    #     X, Y = np.meshgrid(x, y, indexing='ij')
+        
+    #     # Create boolean mask for PEC region
+    #     mask_pec = ((X <= self.focal_plane_x) & 
+    #                 (X >= (self.focal_plane_x - self.thick_x)) & 
+    #                 (Y >= self.focal_plane_y_range[0]) & 
+    #                 (Y <= self.focal_plane_y_range[1]))
+        
+    #     # Apply the mask
+    #     self.eps[mask_pec] = self.eps_pec
+
+
+    #@profile
     def fill_pec_region(self):
-        """Fill the focal plane region with PEC - VECTORIZED"""
+        """Fill the focal plane region with PEC - CHUNKED"""
         x, y = self.create_coordinate_grids()
         
-        # Create meshgrid - use indexing='ij' to match epsilon array dimensions
-        # epsilon array is (len(x), len(y)), so X varies along axis 0, Y along axis 1
-        X, Y = np.meshgrid(x, y, indexing='ij')
+        # Define chunk size (e.g., 1000 rows at a time)
+        chunk_size = 1000
+        nx = len(x)
         
-        # Create boolean mask for PEC region
-        mask_pec = ((X <= self.focal_plane_x) & 
-                    (X >= (self.focal_plane_x - self.thick_x)) & 
-                    (Y >= self.focal_plane_y_range[0]) & 
-                    (Y <= self.focal_plane_y_range[1]))
-        
-        # Apply the mask
-        self.eps[mask_pec] = self.eps_pec
+        for i in range(0, nx, chunk_size):
+            i_end = min(i + chunk_size, nx)
+            
+            # Create meshgrid only for this chunk
+            X_chunk, Y_chunk = np.meshgrid(x[i:i_end], y, indexing='ij')
+            
+            # Create boolean mask for this chunk
+            mask_pec_chunk = ((X_chunk <= self.focal_plane_x) & 
+                            (X_chunk >= (self.focal_plane_x - self.thick_x)) & 
+                            (Y_chunk >= self.focal_plane_y_range[0]) & 
+                            (Y_chunk <= self.focal_plane_y_range[1]))
+            
+            # Apply the mask to this chunk
+            self.eps[i:i_end][mask_pec_chunk] = self.eps_pec
+            
+            # Free memory
+            del X_chunk, Y_chunk, mask_pec_chunk
 
-
+    #@profile
     def calculate_feedhorn_centers(self):
         """Calculate feedhorn center positions"""
         n_feedhorns_positive = int(np.floor(self.feedhorn_y_range[1] / self.t_f)) + 1
@@ -1952,51 +1984,68 @@ class FeedHorn(object):
         
         return self.feedhorn_centers
 
+    #@profile
     def fill_feedhorn_profiles(self, r_pos_spline, r_neg_spline):
-        """Fill air inside feedhorns using spline functions - VECTORIZED"""
+        """Fill air inside feedhorns using spline functions - CHUNKED"""
         x, y = self.create_coordinate_grids()
         
-        # Create meshgrid - use indexing='ij' to match epsilon array dimensions
-        X, Y = np.meshgrid(x, y, indexing='ij')
+        # Define chunk size
+        chunk_size = 1000
+        nx = len(x)
         
-        # Mask for x within feedhorn extent
-        mask_x = (X <= self.focal_plane_x) & (X >= (self.focal_plane_x - self.cumulative_z.max()))
-        
-        # Calculate z position for all grid points
-        z_pos = self.focal_plane_x - X
-        
-        # Mask for valid z positions
-        mask_z = (z_pos >= 0) & (z_pos <= self.cumulative_z.max())
-        
-        # Combine masks
-        mask_region = mask_x & mask_z
-        
-        # Get the radial bounds at each z position (vectorized spline evaluation)
-        # Only evaluate where mask_region is True
-        z_pos_valid = z_pos[mask_region]
-        r_upper_valid = r_pos_spline(z_pos_valid)
-        r_lower_valid = r_neg_spline(z_pos_valid)
-        
-        # For each feedhorn center, check if points are inside
-        for centre in self.feedhorn_centers:
-            # Calculate y distance from feedhorn center for the entire grid
-            y_dist = Y - centre
+        for i in range(0, nx, chunk_size):
+            i_end = min(i + chunk_size, nx)
             
-            # Create temporary arrays for r_upper and r_lower for the full grid
-            r_upper_grid = np.full_like(X, np.nan)
-            r_lower_grid = np.full_like(X, np.nan)
+            # Create meshgrid only for this chunk
+            X_chunk, Y_chunk = np.meshgrid(x[i:i_end], y, indexing='ij')
             
-            # Fill in the valid regions
-            r_upper_grid[mask_region] = r_upper_valid
-            r_lower_grid[mask_region] = r_lower_valid
+            # Mask for x within feedhorn extent (for this chunk)
+            mask_x_chunk = ((X_chunk <= self.focal_plane_x) & 
+                            (X_chunk >= (self.focal_plane_x - self.cumulative_z.max())))
             
-            # Check if points are inside this feedhorn
-            mask_feedhorn = mask_region & (y_dist >= r_lower_grid) & (y_dist <= r_upper_grid)
+            # Calculate z position for this chunk
+            z_pos_chunk = self.focal_plane_x - X_chunk
             
-            # Fill with air
-            self.eps[mask_feedhorn] = self.eps_air
+            # Mask for valid z positions
+            mask_z_chunk = (z_pos_chunk >= 0) & (z_pos_chunk <= self.cumulative_z.max())
+            
+            # Combine masks
+            mask_region_chunk = mask_x_chunk & mask_z_chunk
+            
+            # Get the radial bounds at each z position (vectorized spline evaluation)
+            z_pos_valid = z_pos_chunk[mask_region_chunk]
+            r_upper_valid = r_pos_spline(z_pos_valid)
+            r_lower_valid = r_neg_spline(z_pos_valid)
+            
+            # For each feedhorn center, check if points are inside
+            for centre in self.feedhorn_centers:
+                # Calculate y distance from feedhorn center for this chunk
+                y_dist_chunk = Y_chunk - centre
+                
+                # Create temporary arrays for r_upper and r_lower for this chunk
+                r_upper_grid = np.full_like(X_chunk, np.nan)
+                r_lower_grid = np.full_like(X_chunk, np.nan)
+                
+                # Fill in the valid regions
+                r_upper_grid[mask_region_chunk] = r_upper_valid
+                r_lower_grid[mask_region_chunk] = r_lower_valid
+                
+                # Check if points are inside this feedhorn
+                mask_feedhorn_chunk = (mask_region_chunk & 
+                                    (y_dist_chunk >= r_lower_grid) & 
+                                    (y_dist_chunk <= r_upper_grid))
+                
+                # Fill with air in the epsilon array
+                self.eps[i:i_end][mask_feedhorn_chunk] = self.eps_air
+                
+                # Free memory inside the loop after processing each feedhorn
+                del r_upper_grid, r_lower_grid, y_dist_chunk, mask_feedhorn_chunk
+            
+            # Free memory after each chunk (only variables created outside the feedhorn loop)
+            del X_chunk, Y_chunk, z_pos_chunk, mask_x_chunk, mask_z_chunk
+            del mask_region_chunk, z_pos_valid, r_upper_valid, r_lower_valid
 
-    
+    #@profile
     def plot_focal_plane(self):
         """Plot the simulation grid with focal plane axis"""
         if not self.plot:
@@ -2021,7 +2070,7 @@ class FeedHorn(object):
         plt.savefig(self.savepath + 'step3_focal_plane_plot.png')
         plt.close()
 
-
+    #@profile
     def plot_pec_region(self):
         """Plot the simulation grid with PEC region filled"""
         if not self.plot:
@@ -2044,7 +2093,7 @@ class FeedHorn(object):
         plt.savefig(self.savepath + 'step3b_focal_plane_with_PEC.png')
         plt.close()
 
-
+    #@profile
     def plot_feedhorn_centers(self):
         """Plot feedhorn centers on the focal plane"""
         if not self.plot:
@@ -2074,7 +2123,7 @@ class FeedHorn(object):
         plt.savefig(self.savepath + 'step4_focal_plane_with_feedhorns_plot.png')
         plt.close()
 
-
+    #@profile
     def plot_final_geometry(self):
         """Plot the final feedhorn geometry with all profiles filled"""
         if not self.plot:
@@ -2093,6 +2142,7 @@ class FeedHorn(object):
         plt.savefig(self.savepath + 'step5_feedhorns_with_profiles.png')
         plt.close()
 
+    #@profile
     def add_absorbers_to_extra_PEC(self):
         # # Calculate the remaining length remaining on the PEC layer in the focal plane
         # extra_layer_negative_side = self.focal_plane_y_range[0] - self.feedhorn_y_range[0]
@@ -2128,7 +2178,7 @@ class FeedHorn(object):
         #                                 )
         pass
 
-
+    #@profile
     def assemble(self):
         """Assemble the complete feedhorn geometry"""
         # Load and fit data

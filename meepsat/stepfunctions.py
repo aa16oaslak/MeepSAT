@@ -810,7 +810,7 @@ def create_volume_monitor_func(component, display_name):
             try:
                 # Get field data directly from the monitor volume
                 field_data = sim.get_array(component=component, 
-                                            vol=monitor_obj).transpose()
+                                            vol=monitor_obj)
                 
                 # print(f"Field data shape: {field_data.shape}")
                 # Calculate power in dB
