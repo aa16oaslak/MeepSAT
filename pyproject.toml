@@ -19,6 +19,15 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Operating System :: OS Independent",
 ]
+dependencies = [
+    "jupyter",
+    "numpy",
+    "matplotlib",
+    "scipy",
+    "pandas",
+    "h5py",
+    "memory-profiler"
+]
 
 [project.urls]
 Homepage = "https://github.com/aa16oaslak/MeepSAT.git"
