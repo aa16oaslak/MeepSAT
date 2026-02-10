@@ -2084,9 +2084,9 @@ class Forebaffle(object):
                                        0)
         
         # Calculate the size of the source based on the new cell size and forebaffle parameters
-        self.source_size_adjusted = (self.adjusted_cell_size[0] - boundary_thickness[0] - boundary_thickness[1],
+        self.source_size_adjusted = (0, #self.adjusted_cell_size[0] - boundary_thickness[0] - boundary_thickness[1],
                                      self.adjusted_cell_size[1] - boundary_thickness[2] - boundary_thickness[3],
-                                        0)
+                                     0)
         
 
         if fb_location == 'down':
