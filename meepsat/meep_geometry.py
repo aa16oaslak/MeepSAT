@@ -1973,102 +1973,122 @@ class PyramidalAbsorbers(object):
         
         return pec_blocks
 
-    def _create_substrates(self):
+    def _create_pyramids(self):
         """
-        Create substrate blocks for all edges
+        Create pyramid blocks for all edges
         
         Returns
         -------
         list
-            List of substrate block objects
+            List of pyramid block objects
         """
-        substrates = []
+        pyramids = []
         
-        # Bottom edge substrates
+        # Bottom edge pyramids (pointing upward)
         if "bottom" in self.edges:
-            if self.substrate_extends_beyond_pyramids:
-                substrate_x_start = self.x_coverage_start - self.substrate_extension
-                substrate_x_end = self.x_coverage_end + self.substrate_extension
-            else:
-                substrate_x_start = self.x_coverage_start
-                substrate_x_end = self.x_coverage_end
-                
-            substrate_width = substrate_x_end - substrate_x_start
-            substrate_center_x = (substrate_x_start + substrate_x_end) / 2
-            substrate_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
-                                (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                                self.substrate_thickness/2 + self.y_bottom_offset)
-            
-            substrates.append(mp.Block(
-                size=mp.Vector3(substrate_width, self.substrate_thickness, mp.inf),
-                center=mp.Vector3(substrate_center_x, substrate_center_y),
-                material=self.substrate_material
-            ))
+            for j in range(self.num_pyramids):
+                pyramid_center_x = self.x_coverage_start + (j + 0.5) * self.x_base_width
+                for i in range(self.n_layers):
+                    layer_width = self.calculate_layer_width(i, self.x_base_width)
+                    if layer_width <= 0:
+                        continue
+                    
+                    # FIX: Start pyramids AFTER PEC and substrate
+                    base_y = (-self.mpsat_sim.cell_size[1]/2 + 
+                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml))
+                    
+                    if self.add_pec_backing:
+                        base_y += self.pec_thickness
+                    if self.add_substrate:
+                        base_y += self.substrate_thickness
+                        
+                    layer_center_y = base_y + i * self.layer_thickness + self.layer_thickness/2 + self.y_bottom_offset
+                    
+                    pyramids.append(mp.Block(
+                        size=mp.Vector3(layer_width, self.layer_thickness, mp.inf),
+                        center=mp.Vector3(pyramid_center_x, layer_center_y),
+                        material=self.material
+                    ))
         
-        # Top edge substrates
+        # Top edge pyramids (pointing downward)
         if "top" in self.edges:
-            if self.substrate_extends_beyond_pyramids:
-                substrate_x_start = self.x_coverage_start - self.substrate_extension
-                substrate_x_end = self.x_coverage_end + self.substrate_extension
-            else:
-                substrate_x_start = self.x_coverage_start
-                substrate_x_end = self.x_coverage_end
-                
-            substrate_width = substrate_x_end - substrate_x_start
-            substrate_center_x = (substrate_x_start + substrate_x_end) / 2
-            substrate_center_y = (self.mpsat_sim.cell_size[1]/2 - 
-                                (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                                self.substrate_thickness/2 + self.y_top_offset)
-            
-            substrates.append(mp.Block(
-                size=mp.Vector3(substrate_width, self.substrate_thickness, mp.inf),
-                center=mp.Vector3(substrate_center_x, substrate_center_y),
-                material=self.substrate_material
-            ))
+            for j in range(self.num_pyramids):
+                pyramid_center_x = self.x_coverage_start + (j + 0.5) * self.x_base_width
+                for i in range(self.n_layers):
+                    layer_width = self.calculate_layer_width(i, self.x_base_width)
+                    if layer_width <= 0:
+                        continue
+                    
+                    # FIX: Start pyramids AFTER PEC and substrate
+                    base_y = (self.mpsat_sim.cell_size[1]/2 - 
+                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml))
+                    
+                    if self.add_pec_backing:
+                        base_y -= self.pec_thickness
+                    if self.add_substrate:
+                        base_y -= self.substrate_thickness
+                        
+                    layer_center_y = base_y - i * self.layer_thickness - self.layer_thickness/2 + self.y_top_offset
+                    
+                    pyramids.append(mp.Block(
+                        size=mp.Vector3(layer_width, self.layer_thickness, mp.inf),
+                        center=mp.Vector3(pyramid_center_x, layer_center_y),
+                        material=self.material
+                    ))
         
-        # Left edge substrates
+        # Left edge pyramids (pointing rightward)
         if "left" in self.edges:
-            if self.substrate_extends_beyond_pyramids:
-                substrate_y_start = self.y_coverage_start - self.substrate_extension
-                substrate_y_end = self.y_coverage_end + self.substrate_extension
-            else:
-                substrate_y_start = self.y_coverage_start
-                substrate_y_end = self.y_coverage_end
-                
-            substrate_width = substrate_y_end - substrate_y_start
-            substrate_center_y = (substrate_y_start + substrate_y_end) / 2
-            substrate_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-                                (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                                self.substrate_thickness/2 + self.x_left_offset)
-            
-            substrates.append(mp.Block(
-                size=mp.Vector3(self.substrate_thickness, substrate_width, mp.inf),
-                center=mp.Vector3(substrate_center_x, substrate_center_y),
-                material=self.substrate_material
-            ))
+            for j in range(self.num_pyramids):
+                pyramid_center_y = self.y_coverage_start + (j + 0.5) * self.y_base_width
+                for i in range(self.n_layers):
+                    layer_width = self.calculate_layer_width(i, self.y_base_width)
+                    if layer_width <= 0:
+                        continue
+                    
+                    # FIX: Start pyramids AFTER PEC and substrate
+                    base_x = (-self.mpsat_sim.cell_size[0]/2 + 
+                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml))
+                    
+                    if self.add_pec_backing:
+                        base_x += self.pec_thickness
+                    if self.add_substrate:
+                        base_x += self.substrate_thickness
+                        
+                    layer_center_x = base_x + i * self.layer_thickness + self.layer_thickness/2 + self.x_left_offset
+                    
+                    pyramids.append(mp.Block(
+                        size=mp.Vector3(self.layer_thickness, layer_width, mp.inf),
+                        center=mp.Vector3(layer_center_x, pyramid_center_y),
+                        material=self.material
+                    ))
         
-        # Right edge substrates
+        # Right edge pyramids (pointing leftward)
         if "right" in self.edges:
-            if self.substrate_extends_beyond_pyramids:
-                substrate_y_start = self.y_coverage_start - self.substrate_extension
-                substrate_y_end = self.y_coverage_end + self.substrate_extension
-            else:
-                substrate_y_start = self.y_coverage_start
-                substrate_y_end = self.y_coverage_end
-                
-            substrate_width = substrate_y_end - substrate_y_start
-            substrate_center_y = (substrate_y_start + substrate_y_end) / 2
-            substrate_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-                                (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                                self.substrate_thickness/2 + self.x_right_offset)
-            
-            substrates.append(mp.Block(
-                size=mp.Vector3(self.substrate_thickness, substrate_width, mp.inf),
-                center=mp.Vector3(substrate_center_x, substrate_center_y),
-                material=self.substrate_material
-            ))
+            for j in range(self.num_pyramids):
+                pyramid_center_y = self.y_coverage_start + (j + 0.5) * self.y_base_width
+                for i in range(self.n_layers):
+                    layer_width = self.calculate_layer_width(i, self.y_base_width)
+                    if layer_width <= 0:
+                        continue
+                    
+                    # FIX: Start pyramids AFTER PEC and substrate
+                    base_x = (self.mpsat_sim.cell_size[0]/2 - 
+                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml))
+                    
+                    if self.add_pec_backing:
+                        base_x -= self.pec_thickness
+                    if self.add_substrate:
+                        base_x -= self.substrate_thickness
+                        
+                    layer_center_x = base_x - i * self.layer_thickness - self.layer_thickness/2 + self.x_right_offset
+                    
+                    pyramids.append(mp.Block(
+                        size=mp.Vector3(self.layer_thickness, layer_width, mp.inf),
+                        center=mp.Vector3(layer_center_x, pyramid_center_y),
+                        material=self.material
+                    ))
         
-        return substrates
+        return pyramids
 
     def _create_pyramids(self):
         """
