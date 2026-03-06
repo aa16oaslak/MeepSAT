@@ -1914,15 +1914,18 @@ class PyramidalAbsorbers(object):
             pec_width = pec_y_end - pec_y_start
             pec_center_y = (pec_y_start + pec_y_end) / 2
             
-            # Position PEC to the left of substrate (if present) or left of pyramids
+            # FIX: Position PEC between PML boundary and substrate (or pyramids if no substrate)
+            # PEC should be INSIDE the simulation, not outside
             if self.add_substrate:
+                # PEC goes between PML and substrate
                 pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-                             (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                             self.substrate_thickness - self.pec_thickness/2 + self.x_left_offset)
+                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+                            self.pec_thickness/2 + self.x_left_offset)
             else:
+                # PEC goes between PML and pyramids
                 pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-                             (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                             self.pec_thickness/2 + self.x_left_offset)
+                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+                            self.pec_thickness/2 + self.x_left_offset)
             
             pec_blocks.append(mp.Block(
                 size=mp.Vector3(self.pec_thickness, pec_width, mp.inf),
@@ -1949,15 +1952,18 @@ class PyramidalAbsorbers(object):
             pec_width = pec_y_end - pec_y_start
             pec_center_y = (pec_y_start + pec_y_end) / 2
             
-            # Position PEC to the right of substrate (if present) or right of pyramids
+            # FIX: Position PEC INSIDE the simulation, not outside
+            # PEC goes between PML boundary and absorbers (substrate or pyramids)
             if self.add_substrate:
+                # PEC between PML and substrate - SUBTRACT to go inward
                 pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-                             (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                             self.substrate_thickness + self.pec_thickness/2 + self.x_right_offset)
+                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+                            self.pec_thickness/2 + self.x_right_offset)
             else:
+                # PEC between PML and pyramids - SUBTRACT to go inward
                 pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-                             (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                             self.pec_thickness/2 + self.x_right_offset)
+                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+                            self.pec_thickness/2 + self.x_right_offset)
             
             pec_blocks.append(mp.Block(
                 size=mp.Vector3(self.pec_thickness, pec_width, mp.inf),
