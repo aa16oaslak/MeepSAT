@@ -559,7 +559,6 @@ def meep_block(size,
 
 #& APERTURE STOP
 
-
 class ApertureStop(object):
     '''
     Class defining an aperture stop
@@ -702,20 +701,6 @@ class ApertureStop(object):
         print(f'Centers: Up={centre_up}, Down={centre_down}')
 
         return aperture_stop_up, aperture_stop_down
-
-    def assemble(self):
-        '''
-        Returns the block objects for the aperture stop according to the type
-        
-        Returns
-        -------
-        tuple
-            Two block objects (aperture_stop_up, aperture_stop_down)
-        '''
-        if self.type == 'square':
-            return self.square_aperture()
-        else:
-            raise ValueError(f'Invalid aperture stop type: {self.type}. Currently only "square" is supported.')
 
 
 # class ApertureStop(object):
@@ -870,22 +855,22 @@ class ApertureStop(object):
 #         return aperture_stop_up, aperture_stop_down
     
 
-    # def assemble(self):
-    #     '''
-    #     Returns the block object for the aperture stop
+#     def assemble(self):
+#         '''
+#         Returns the block object for the aperture stop
 
-    #     Arguments
-    #     ---------
-    #     centre_list : list, optional
-    #         List of the centers of the aperture stop
+#         Arguments
+#         ---------
+#         centre_list : list, optional
+#             List of the centers of the aperture stop
 
-    #     size_list : list, optional
-    #         List of the sizes of the aperture stop
-    #     '''
-    #     if self.type == 'square':
-    #         return self.square_aperture()
-    #     else:
-    #         raise ValueError('Invalid aperture stop type name')
+#         size_list : list, optional
+#             List of the sizes of the aperture stop
+#         '''
+#         if self.type == 'square':
+#             return self.square_aperture()
+#         else:
+#             raise ValueError('Invalid aperture stop type name')
 
 
 ###& LENS Mounting
