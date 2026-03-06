@@ -460,19 +460,58 @@ mpsat_sim.add_eps_geometry({lens})
 #         return script
 
 #^====================================================================================================================^#
+# def square_aperture(aperture_data, aperture_name):
+#     # Handle the special mp.inf case for conductivity
+#     if aperture_data["conductivity"] == "mp.inf":
+#         conductivity = "mp.inf"
+#     else:
+#         conductivity = aperture_data["conductivity"]
+        
+#     script = f"""
+# #~ Adding Aperture: Square
+# {aperture_name}_init = comp_meep.ApertureStop(mpsat_sim=mpsat_sim,
+#                                        type='{aperture_data["type"]}',
+#                                        diameter={aperture_data["diameter"]},
+#                                        pos_x={aperture_data["pos_x"]},
+#                                        thickness={aperture_data["thickness"]},
+#                                        n_refr={aperture_data.get("n_refr", 1.0)},
+#                                        conductivity={conductivity},
+#                                        material={aperture_data.get("material", "None")},
+#                                        y_centre_offset={aperture_data.get("y_centre_offset", [0, 0])},
+#                                        y_size_offset={aperture_data.get("y_size_offset", [0, 0])}
+# )
+
+# {aperture_name}_up, {aperture_name}_down = {aperture_name}_init.assemble()
+# mpsat_sim.add_meep_geometry({aperture_name}_up)
+# mpsat_sim.add_meep_geometry({aperture_name}_down)
+# """
+#     return script
+
 def square_aperture(aperture_data, aperture_name):
     # Handle the special mp.inf case for conductivity
     if aperture_data["conductivity"] == "mp.inf":
         conductivity = "mp.inf"
     else:
         conductivity = aperture_data["conductivity"]
+    
+    # Determine which position parameter to use
+    pos_x = aperture_data.get("pos_x", None)
+    pos_y = aperture_data.get("pos_y", None)
+    
+    # Build position parameter string
+    if pos_x is not None:
+        pos_param = f"pos_x={pos_x}"
+    elif pos_y is not None:
+        pos_param = f"pos_y={pos_y}"
+    else:
+        raise ValueError(f"Aperture {aperture_name} must have either pos_x or pos_y defined")
         
     script = f"""
 #~ Adding Aperture: Square
 {aperture_name}_init = comp_meep.ApertureStop(mpsat_sim=mpsat_sim,
                                        type='{aperture_data["type"]}',
                                        diameter={aperture_data["diameter"]},
-                                       pos_x={aperture_data["pos_x"]},
+                                       {pos_param},
                                        thickness={aperture_data["thickness"]},
                                        n_refr={aperture_data.get("n_refr", 1.0)},
                                        conductivity={conductivity},
