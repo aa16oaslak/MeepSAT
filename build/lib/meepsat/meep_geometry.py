@@ -1428,17 +1428,19 @@ class FluxMonitor():
         return flux_region
     
 
+
 class PyramidalAbsorbers(object):
     '''
     Class defining pyramidal absorbers along the edges of the simulation cell.
     '''
     def __init__(self,
                  mpsat_sim,
+                 num_pyramids,
+                 add_pyramids=True,
                  base_width=None,
                  top_width=0,
                  height=None,
                  layer_thickness=None,
-                 num_pyramids=20,
                  n_layers=10,
                  material=None,
                  epsilon_real=2.5,
@@ -1552,10 +1554,12 @@ class PyramidalAbsorbers(object):
         # Sims object
         self.mpsat_sim = set_sims_obj(self, mpsat_sim)
         
+        # self.mpsat_sim = mpsat_sim
         # Basic parameters
         self.name = name if name else "Pyramidal Absorbers"
         self.object_type = 'PyramidalAbsorber'
         self.num_pyramids = num_pyramids
+        self.add_pyramids = add_pyramids
         self.n_layers = n_layers
         self.edges = edges
         self.coverage_percent = coverage_percent
@@ -1804,8 +1808,9 @@ class PyramidalAbsorbers(object):
             substrate_count = 0
         
         # Finally create pyramids
-        pyramids = self._create_pyramids()
-        all_objects.extend(pyramids)
+        if self.add_pyramids:
+            pyramids = self._create_pyramids()
+            all_objects.extend(pyramids)
         
         # Print summary
         print(f"Assembled {len(pyramids)} pyramid blocks, {substrate_count} substrate blocks, "
@@ -1845,14 +1850,18 @@ class PyramidalAbsorbers(object):
             pec_center_x = (pec_x_start + pec_x_end) / 2
             
             # Position PEC below substrate (if present) or below pyramids
-            if self.add_substrate:
-                pec_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
-                              (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                              self.substrate_thickness - self.pec_thickness/2 + self.y_bottom_offset)
-            else:
-                pec_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
-                              (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                              self.pec_thickness/2 + self.y_bottom_offset)
+            # if self.add_substrate:
+            #     pec_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
+            #                   (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+            #                   self.substrate_thickness + self.pec_thickness/2 + self.y_bottom_offset)
+            # else:
+            #     pec_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
+            #                   (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+            #                   self.pec_thickness/2 + self.y_bottom_offset)
+            
+            pec_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
+                      (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+                      self.pec_thickness/2 + self.y_bottom_offset)
             
             pec_blocks.append(mp.Block(
                 size=mp.Vector3(pec_width, self.pec_thickness, mp.inf),
@@ -1879,15 +1888,20 @@ class PyramidalAbsorbers(object):
             pec_width = pec_x_end - pec_x_start
             pec_center_x = (pec_x_start + pec_x_end) / 2
             
-            # Position PEC above substrate (if present) or above pyramids
-            if self.add_substrate:
-                pec_center_y = (self.mpsat_sim.cell_size[1]/2 - 
-                             (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                             self.substrate_thickness + self.pec_thickness/2 + self.y_top_offset)
-            else:
-                pec_center_y = (self.mpsat_sim.cell_size[1]/2 - 
-                             (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                             self.pec_thickness/2 + self.y_top_offset)
+            # # Position PEC above substrate (if present) or above pyramids
+            # if self.add_substrate:
+            #     pec_center_y = (self.mpsat_sim.cell_size[1]/2 - 
+            #                  (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+            #                  self.substrate_thickness + self.pec_thickness/2 + self.y_top_offset)
+            # else:
+            #     pec_center_y = (self.mpsat_sim.cell_size[1]/2 - 
+            #                  (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+            #                  self.pec_thickness/2 + self.y_top_offset)
+            
+            pec_center_y = (self.mpsat_sim.cell_size[1]/2 - 
+                      (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+                      self.pec_thickness/2 - self.y_bottom_offset)
+            
             
             pec_blocks.append(mp.Block(
                 size=mp.Vector3(pec_width, self.pec_thickness, mp.inf),
@@ -1914,18 +1928,22 @@ class PyramidalAbsorbers(object):
             pec_width = pec_y_end - pec_y_start
             pec_center_y = (pec_y_start + pec_y_end) / 2
             
-            # FIX: Position PEC between PML boundary and substrate (or pyramids if no substrate)
-            # PEC should be INSIDE the simulation, not outside
-            if self.add_substrate:
-                # PEC goes between PML and substrate
-                pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                            self.pec_thickness/2 + self.x_left_offset)
-            else:
-                # PEC goes between PML and pyramids
-                pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                            self.pec_thickness/2 + self.x_left_offset)
+            # # FIX: Position PEC between PML boundary and substrate (or pyramids if no substrate)
+            # # PEC should be INSIDE the simulation, not outside
+            # if self.add_substrate:
+            #     # PEC goes between PML and substrate (behind substrate)
+            #     pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
+            #                 (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+            #                 self.substrate_thickness - self.pec_thickness/2 + self.x_left_offset)
+            # else:
+            #     # PEC goes between PML and pyramids (no substrate)
+            #     pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
+            #                 (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+            #                 self.pec_thickness/2 + self.x_left_offset)
+            
+            pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
+                        (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+                        self.pec_thickness/2 + self.x_left_offset)
             
             pec_blocks.append(mp.Block(
                 size=mp.Vector3(self.pec_thickness, pec_width, mp.inf),
@@ -1952,18 +1970,22 @@ class PyramidalAbsorbers(object):
             pec_width = pec_y_end - pec_y_start
             pec_center_y = (pec_y_start + pec_y_end) / 2
             
-            # FIX: Position PEC INSIDE the simulation, not outside
-            # PEC goes between PML boundary and absorbers (substrate or pyramids)
-            if self.add_substrate:
-                # PEC between PML and substrate - SUBTRACT to go inward
-                pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                            self.pec_thickness/2 + self.x_right_offset)
-            else:
-                # PEC between PML and pyramids - SUBTRACT to go inward
-                pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                            self.pec_thickness/2 + self.x_right_offset)
+            # # FIX: Position PEC INSIDE the simulation, not outside
+            # # PEC goes between PML boundary and absorbers (substrate or pyramids)
+            # if self.add_substrate:
+            #     # PEC between PML and substrate - behind the substrate
+            #     pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
+            #                 (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+            #                 self.substrate_thickness + self.pec_thickness/2 + self.x_right_offset)
+            # else:
+            #     # PEC between PML and pyramids - no substrate
+            #     pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
+            #                 (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+            #                 self.pec_thickness/2 + self.x_right_offset)
+            
+            pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
+                        (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+                        self.pec_thickness/2 - self.x_left_offset)
             
             pec_blocks.append(mp.Block(
                 size=mp.Vector3(self.pec_thickness, pec_width, mp.inf),
@@ -1972,6 +1994,129 @@ class PyramidalAbsorbers(object):
             ))
         
         return pec_blocks
+
+    def _create_substrates(self):
+        """
+        Create substrate blocks for all edges
+        
+        Returns
+        -------
+        list
+            List of substrate block objects
+        """
+        substrates = []
+        
+        # Bottom edge substrates
+        if "bottom" in self.edges:
+            if self.substrate_extends_beyond_pyramids:
+                substrate_x_start = self.x_coverage_start - self.substrate_extension
+                substrate_x_end = self.x_coverage_end + self.substrate_extension
+            else:
+                substrate_x_start = self.x_coverage_start
+                substrate_x_end = self.x_coverage_end
+                
+            substrate_width = substrate_x_end - substrate_x_start
+            substrate_center_x = (substrate_x_start + substrate_x_end) / 2
+            
+            # Position substrate after PEC (if present) or after PML
+            if self.add_pec_backing:
+                substrate_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
+                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+                                    self.pec_thickness + self.substrate_thickness/2 + self.y_bottom_offset)
+            else:
+                substrate_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
+                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+                                    self.substrate_thickness/2 + self.y_bottom_offset)
+            
+            substrates.append(mp.Block(
+                size=mp.Vector3(substrate_width, self.substrate_thickness, mp.inf),
+                center=mp.Vector3(substrate_center_x, substrate_center_y),
+                material=self.substrate_material
+            ))
+        
+        # Top edge substrates
+        if "top" in self.edges:
+            if self.substrate_extends_beyond_pyramids:
+                substrate_x_start = self.x_coverage_start - self.substrate_extension
+                substrate_x_end = self.x_coverage_end + self.substrate_extension
+            else:
+                substrate_x_start = self.x_coverage_start
+                substrate_x_end = self.x_coverage_end
+                
+            substrate_width = substrate_x_end - substrate_x_start
+            substrate_center_x = (substrate_x_start + substrate_x_end) / 2
+
+            # Position substrate after PEC (if present) or after PML
+            if self.add_pec_backing:
+                substrate_center_y = (self.mpsat_sim.cell_size[1]/2 - 
+                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+                                    self.pec_thickness - self.substrate_thickness/2 - self.y_bottom_offset)
+            else:
+                substrate_center_y = (self.mpsat_sim.cell_size[1]/2 + 
+                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+                                    self.substrate_thickness/2 - self.y_bottom_offset)
+            
+            substrates.append(mp.Block(
+                size=mp.Vector3(substrate_width, self.substrate_thickness, mp.inf),
+                center=mp.Vector3(substrate_center_x, substrate_center_y),
+                material=self.substrate_material
+            ))
+        
+        # Left edge substrates
+        if "left" in self.edges:
+            if self.substrate_extends_beyond_pyramids:
+                substrate_y_start = self.y_coverage_start - self.substrate_extension
+                substrate_y_end = self.y_coverage_end + self.substrate_extension
+            else:
+                substrate_y_start = self.y_coverage_start
+                substrate_y_end = self.y_coverage_end
+                
+            substrate_width = substrate_y_end - substrate_y_start
+            substrate_center_y = (substrate_y_start + substrate_y_end) / 2
+            
+            if self.add_pec_backing:
+                substrate_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
+                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+                                    self.pec_thickness + self.substrate_thickness/2 + self.x_left_offset)
+            else:
+                substrate_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
+                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
+                                    self.substrate_thickness/2 + self.x_left_offset)
+            
+            substrates.append(mp.Block(
+                size=mp.Vector3(self.substrate_thickness, substrate_width, mp.inf),
+                center=mp.Vector3(substrate_center_x, substrate_center_y),
+                material=self.substrate_material
+            ))
+        
+        # Right edge substrates
+        if "right" in self.edges:
+            if self.substrate_extends_beyond_pyramids:
+                substrate_y_start = self.y_coverage_start - self.substrate_extension
+                substrate_y_end = self.y_coverage_end + self.substrate_extension
+            else:
+                substrate_y_start = self.y_coverage_start
+                substrate_y_end = self.y_coverage_end
+                
+            substrate_width = substrate_y_end - substrate_y_start
+            substrate_center_y = (substrate_y_start + substrate_y_end) / 2
+            
+            if self.add_pec_backing:
+                substrate_center_x = (self.mpsat_sim.cell_size[0]/2 - 
+                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+                                    self.pec_thickness - self.substrate_thickness/2 - self.x_left_offset)
+            else:
+                substrate_center_x = (self.mpsat_sim.cell_size[0]/2 - 
+                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
+                                    self.substrate_thickness/2 - self.x_left_offset)
+            
+            substrates.append(mp.Block(
+                size=mp.Vector3(self.substrate_thickness, substrate_width, mp.inf),
+                center=mp.Vector3(substrate_center_x, substrate_center_y),
+                material=self.substrate_material
+            ))
+        
+        return substrates
 
     def _create_pyramids(self):
         """
@@ -1984,25 +2129,29 @@ class PyramidalAbsorbers(object):
         """
         pyramids = []
         
+        #~ Bottom
+        # Calculate base offset for pyramids based on what exists before them
+        def get_base_offset():
+            offset = self.mpsat_sim.factor_dpml * self.mpsat_sim.dpml
+            if self.add_pec_backing:
+                offset += self.pec_thickness
+            if self.add_substrate:
+                offset += self.substrate_thickness
+            return offset
+    
         # Bottom edge pyramids (pointing upward)
         if "bottom" in self.edges:
+            base_offset = get_base_offset()
+
             for j in range(self.num_pyramids):
                 pyramid_center_x = self.x_coverage_start + (j + 0.5) * self.x_base_width
                 for i in range(self.n_layers):
                     layer_width = self.calculate_layer_width(i, self.x_base_width)
                     if layer_width <= 0:
-                        continue
-                    
-                    # FIX: Start pyramids AFTER PEC and substrate
-                    base_y = (-self.mpsat_sim.cell_size[1]/2 + 
-                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml))
-                    
-                    if self.add_pec_backing:
-                        base_y += self.pec_thickness
-                    if self.add_substrate:
-                        base_y += self.substrate_thickness
+                        continue  # Skip layers with zero or negative width
                         
-                    layer_center_y = base_y + i * self.layer_thickness + self.layer_thickness/2 + self.y_bottom_offset
+                    layer_center_y = (-self.mpsat_sim.cell_size[1]/2 + base_offset +
+                                    i * self.layer_thickness + self.layer_thickness/2 + self.y_bottom_offset)
                     
                     pyramids.append(mp.Block(
                         size=mp.Vector3(layer_width, self.layer_thickness, mp.inf),
@@ -2010,25 +2159,19 @@ class PyramidalAbsorbers(object):
                         material=self.material
                     ))
         
+        #~ Top
         # Top edge pyramids (pointing downward)
         if "top" in self.edges:
+            base_offset = get_base_offset()
             for j in range(self.num_pyramids):
                 pyramid_center_x = self.x_coverage_start + (j + 0.5) * self.x_base_width
                 for i in range(self.n_layers):
                     layer_width = self.calculate_layer_width(i, self.x_base_width)
                     if layer_width <= 0:
                         continue
-                    
-                    # FIX: Start pyramids AFTER PEC and substrate
-                    base_y = (self.mpsat_sim.cell_size[1]/2 - 
-                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml))
-                    
-                    if self.add_pec_backing:
-                        base_y -= self.pec_thickness
-                    if self.add_substrate:
-                        base_y -= self.substrate_thickness
                         
-                    layer_center_y = base_y - i * self.layer_thickness - self.layer_thickness/2 + self.y_top_offset
+                    layer_center_y = (self.mpsat_sim.cell_size[1]/2 - base_offset - 
+                                    i * self.layer_thickness - self.layer_thickness/2 + self.y_top_offset)
                     
                     pyramids.append(mp.Block(
                         size=mp.Vector3(layer_width, self.layer_thickness, mp.inf),
@@ -2036,25 +2179,19 @@ class PyramidalAbsorbers(object):
                         material=self.material
                     ))
         
+        #~ Left
         # Left edge pyramids (pointing rightward)
         if "left" in self.edges:
+            base_offset = get_base_offset()
             for j in range(self.num_pyramids):
                 pyramid_center_y = self.y_coverage_start + (j + 0.5) * self.y_base_width
                 for i in range(self.n_layers):
                     layer_width = self.calculate_layer_width(i, self.y_base_width)
                     if layer_width <= 0:
                         continue
-                    
-                    # FIX: Start pyramids AFTER PEC and substrate
-                    base_x = (-self.mpsat_sim.cell_size[0]/2 + 
-                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml))
-                    
-                    if self.add_pec_backing:
-                        base_x += self.pec_thickness
-                    if self.add_substrate:
-                        base_x += self.substrate_thickness
                         
-                    layer_center_x = base_x + i * self.layer_thickness + self.layer_thickness/2 + self.x_left_offset
+                    layer_center_x = (-self.mpsat_sim.cell_size[0]/2 + base_offset + 
+                                    i * self.layer_thickness + self.layer_thickness/2 + self.x_left_offset)
                     
                     pyramids.append(mp.Block(
                         size=mp.Vector3(self.layer_thickness, layer_width, mp.inf),
@@ -2062,25 +2199,19 @@ class PyramidalAbsorbers(object):
                         material=self.material
                     ))
         
+        #~ Right
         # Right edge pyramids (pointing leftward)
         if "right" in self.edges:
+            base_offset = get_base_offset()
             for j in range(self.num_pyramids):
                 pyramid_center_y = self.y_coverage_start + (j + 0.5) * self.y_base_width
                 for i in range(self.n_layers):
                     layer_width = self.calculate_layer_width(i, self.y_base_width)
                     if layer_width <= 0:
                         continue
-                    
-                    # FIX: Start pyramids AFTER PEC and substrate
-                    base_x = (self.mpsat_sim.cell_size[0]/2 - 
-                            (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml))
-                    
-                    if self.add_pec_backing:
-                        base_x -= self.pec_thickness
-                    if self.add_substrate:
-                        base_x -= self.substrate_thickness
                         
-                    layer_center_x = base_x - i * self.layer_thickness - self.layer_thickness/2 + self.x_right_offset
+                    layer_center_x = (self.mpsat_sim.cell_size[0]/2 - base_offset -
+                                    i * self.layer_thickness - self.layer_thickness/2 + self.x_right_offset)
                     
                     pyramids.append(mp.Block(
                         size=mp.Vector3(self.layer_thickness, layer_width, mp.inf),
@@ -2089,7 +2220,7 @@ class PyramidalAbsorbers(object):
                     ))
         
         return pyramids
-
+    
 
 
 # # ~ FOREBAFFLE CLASS

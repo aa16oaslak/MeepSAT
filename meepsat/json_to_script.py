@@ -574,7 +574,7 @@ def add_slab(data):
             
             script += f"""
 # Slab: {slab_name}
-{slab_name}_init = comp_meep.Slab(
+{slab_name}_init = meep.Slab(
     mpsat_sim=mpsat_sim,
     name='{slab_data.get("name", "block")}',
     center={center_str},
