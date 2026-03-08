@@ -545,6 +545,8 @@ def meep_block(size,
         e1 = e1.rotate(axis, math.radians(angle))
         e2 = e2.rotate(axis, math.radians(angle))
         e3 = e3.rotate(axis, math.radians(angle))
+        print(f"Rotating block by {angle}° around {rot_axis}-axis")
+
 
     # Return the block with the given parameters
     return mp.Block(size=size,
@@ -1794,6 +1796,7 @@ class PyramidalAbsorbers(object):
         # First, create PEC backing if enabled (should be placed below substrate)
         if self.add_pec_backing:
             pec_blocks = self._create_pec_backing()
+            print(f"Assembled {len(pec_blocks)} PEC backing blocks")
             all_objects.extend(pec_blocks)
             pec_count = len(pec_blocks)
         else:
@@ -1802,6 +1805,7 @@ class PyramidalAbsorbers(object):
         # Then create substrates if enabled
         if self.add_substrate:
             substrates = self._create_substrates()
+            print(f"Assembled {len(substrates)} substrate blocks")
             all_objects.extend(substrates)
             substrate_count = len(substrates)
         else:
@@ -1810,11 +1814,12 @@ class PyramidalAbsorbers(object):
         # Finally create pyramids
         if self.add_pyramids:
             pyramids = self._create_pyramids()
+            print(f"Assembled {len(pyramids)} pyramid blocks")
             all_objects.extend(pyramids)
         
         # Print summary
-        print(f"Assembled {len(pyramids)} pyramid blocks, {substrate_count} substrate blocks, "
-              f"and {pec_count} PEC backing blocks")
+        # print(f"Assembled {len(pyramids)} pyramid blocks, {substrate_count} substrate blocks, "
+        #       f"and {pec_count} PEC backing blocks")
         print(f"Total objects: {len(all_objects)}")
         
         return all_objects

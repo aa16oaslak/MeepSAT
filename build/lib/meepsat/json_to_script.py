@@ -421,7 +421,8 @@ def add_lens(data):
 {lens},  {lens}_stepped_pyramid_ARC_blocks = {lens}_init.assemble_with_stepped_pyramid_ARC()
 # Adding the list of stepped pyramid ARC MEEP blocks to meepsat geometry
 for stepped_pyramid_ARC_blocks in {lens}_stepped_pyramid_ARC_blocks:
-    mpsat_sim.add_meep_geometry(stepped_pyramid_ARC_blocks)
+    mpsat_sim.
+    (stepped_pyramid_ARC_blocks)
 """ 
             else:
                 script += f"""
@@ -574,7 +575,7 @@ def add_slab(data):
             
             script += f"""
 # Slab: {slab_name}
-{slab_name}_init = meep.Slab(
+{slab_name}_init = comp_meep.Slab(
     mpsat_sim=mpsat_sim,
     name='{slab_data.get("name", "block")}',
     center={center_str},

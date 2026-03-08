@@ -1,3 +1,7 @@
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import List, Optional, Literal
+import logging
 import sys
 import os
 import site
@@ -545,6 +549,8 @@ def meep_block(size,
         e1 = e1.rotate(axis, math.radians(angle))
         e2 = e2.rotate(axis, math.radians(angle))
         e3 = e3.rotate(axis, math.radians(angle))
+        print(f"Rotating block by {angle}° around {rot_axis}-axis")
+
 
     # Return the block with the given parameters
     return mp.Block(size=size,
@@ -1794,6 +1800,7 @@ class PyramidalAbsorbers(object):
         # First, create PEC backing if enabled (should be placed below substrate)
         if self.add_pec_backing:
             pec_blocks = self._create_pec_backing()
+            print(f"Assembled {len(pec_blocks)} PEC backing blocks")
             all_objects.extend(pec_blocks)
             pec_count = len(pec_blocks)
         else:
@@ -1802,6 +1809,7 @@ class PyramidalAbsorbers(object):
         # Then create substrates if enabled
         if self.add_substrate:
             substrates = self._create_substrates()
+            print(f"Assembled {len(substrates)} substrate blocks")
             all_objects.extend(substrates)
             substrate_count = len(substrates)
         else:
@@ -1810,11 +1818,12 @@ class PyramidalAbsorbers(object):
         # Finally create pyramids
         if self.add_pyramids:
             pyramids = self._create_pyramids()
+            print(f"Assembled {len(pyramids)} pyramid blocks")
             all_objects.extend(pyramids)
         
         # Print summary
-        print(f"Assembled {len(pyramids)} pyramid blocks, {substrate_count} substrate blocks, "
-              f"and {pec_count} PEC backing blocks")
+        # print(f"Assembled {len(pyramids)} pyramid blocks, {substrate_count} substrate blocks, "
+        #       f"and {pec_count} PEC backing blocks")
         print(f"Total objects: {len(all_objects)}")
         
         return all_objects
@@ -2224,375 +2233,420 @@ class PyramidalAbsorbers(object):
 
 
 # # ~ FOREBAFFLE CLASS
-class Forebaffle(object):
-    '''
-    Class defining a triangular forebaffle structure, adjusts the size of the cells and source based on the angle of the forebaffle to ensure proper geometry.
-    '''
-    def __init__(self,
-                 window_diameter,
-                 cell_size,
-                 source_center,
-                 source_size,
-                 window_lens1_distance,
-                 cellx_sourcex_distance,
-                 sourcex_FB_vertex_distance,
-                 optics_tube_length,
-                 boundary_thickness,
-                 fb_angle_degrees,
-                 fb_hypotenuse,
-                 fb_location,
-                 fb_material=mp.perfect_electric_conductor,
-                 fb_epsilon_real=5.4,
-                 fb_epsilon_imag=0.0,
-                 sim_type= 'TFWD'
-                ):
-        '''
-        Defines a triangular forebaffle structure with a specific angle
+
+logger = logging.getLogger(__name__)
+
+
+# * ############################################################################################################
+# * BASE CLASSES - Define abstract base class first
+# * ############################################################################################################
+
+class ForebaffleComponent(ABC):
+    """Abstract base class for forebaffle components."""
+    
+    @abstractmethod
+    def get_geometry(self, parent_forebaffle) -> List[mp.GeometricObject]:
+        """Return MEEP geometric objects for this component."""
+        pass
+    
+
+# * ############################################################################################################
+# * DATACLASSES - Configuration classes
+# * ############################################################################################################
+
+
+@dataclass
+class AbsorberLayer:
+    """Configuration for an absorber layer on a forebaffle side."""
+    side: Literal['base', 'height', 'hypotenuse']
+    thickness: float
+    material: mp.Medium = None
+    epsilon_real: float = 1.0
+    epsilon_imag: float = 0.0
+    
+    def get_material(self, freq: float = 1/3) -> mp.Medium:
+        """Get the material with absorption properties."""
+        if self.material is not None:
+            return self.material
+        return mp.Medium(epsilon=self.epsilon_real, 
+                         D_conductivity=self.epsilon_imag * 2 * np.pi * freq / self.epsilon_real)
+
+
+class AbsorberComponent(ForebaffleComponent):
+    """Component that adds absorber layers to forebaffle sides."""
+    
+    def __init__(self, absorber_layers: List[AbsorberLayer]):
+        self.absorber_layers = absorber_layers
+    
+    def get_geometry(self, parent_forebaffle) -> List[mp.GeometricObject]:
+        """Generate absorber layer geometries based on parent forebaffle."""
+        geometries = []
+        v1, v2, v3 = parent_forebaffle.calculate_vertices()
+        
+        for layer in self.absorber_layers:
+            if layer.side == 'base':
+                geom = self._create_base_absorber(v1, v2, layer, parent_forebaffle)
+            elif layer.side == 'height':
+                geom = self._create_height_absorber(v2, v3, layer, parent_forebaffle)
+            elif layer.side == 'hypotenuse':
+                geom = self._create_hypotenuse_absorber(v1, v3, v2, layer, parent_forebaffle)
+            
+            if geom:
+                geometries.append(geom)
+        
+        return geometries
+    
+    def _ensure_ccw_order(self, vertices):
+        """
+        Ensure vertices are in counter-clockwise order using the shoelace formula.
+        
         Parameters
         ----------
-        window_diameter : float
-            Diameter of the window after the forebaffle
-        cell_size : float
-            Size of the simulation cell
-        source_center : float
-            Center position of the source
-        source_size : float
-            Size of the source
-        window_lens1_distance : float
-            Distance from the left surface of the window to the left surface of lens 1
-        cellx_sourcex_distance : float
-            Distance from the left edge of the cell to the left edge of the source
-        sourcex_FB_vertex_distance : float
-            Distance from the left edge of the source to the vertex of the forebaffle
-        optics_tube_length : float
-            Length of the optics tube
-        boundary_thickness : list [Xlow, Xhigh, Ylow, Yhigh]
-            Thickness of the simulation boundaries
-        fb_angle_degrees : float
-            Angle of the forebaffle in degrees
-        fb_hypotenuse : float
-            Length of the hypotenuse of the forebaffle triangle
-        fb_location: str
-            Type of forebaffle location, options are 'up' and 'down'
-        fb_material : mp.Medium
-            Material for the forebaffle
-        fb_epsilon_real : float
-            Real part of permittivity for the forebaffle material
-        fb_epsilon_imag : float
-            Imaginary part of permittivity for the forebaffle material¨
-        sim_type: str
-            Type of simulation (TFWD or TR) - useful for source center
-        '''
-        self.window_diameter = window_diameter
-        self.cell_size = cell_size
-        self.source_center = source_center
-        self.source_size = source_size
-        self.window_lens1_distance = window_lens1_distance
-        self.cellx_sourcex_distance = cellx_sourcex_distance
-        self.sourcex_FB_vertex_distance = sourcex_FB_vertex_distance
-        self.optics_tube_length = optics_tube_length
-        self.fb_angle_degrees = fb_angle_degrees
-        self.fb_angle_radians = np.radians(fb_angle_degrees)
-        self.fb_hypotenuse = fb_hypotenuse
-        
-        # Calculate the expected height of the forebaffle based on the angle and hypotenuse
-        self.fb_height = np.abs(self.fb_hypotenuse * np.sin(self.fb_angle_radians))
-
-        # Calculate the base length of the forebaffle
-        self.fb_base_length = np.sqrt(self.fb_hypotenuse**2 - self.fb_height**2)
-
-        # Adjust the cell size based on the forebaffle dimensions
-        self.adjusted_cell_size = (boundary_thickness[0] + self.cellx_sourcex_distance + self.sourcex_FB_vertex_distance + self.fb_base_length + self.optics_tube_length + boundary_thickness[1],
-                                   2*self.fb_height + window_diameter + boundary_thickness[2] + boundary_thickness[3],              
-                                   0)
-    
-        # Calculate the adjustments on the centre of Source
-        self.source_center_adjusted = (- self.adjusted_cell_size[0]/2 + boundary_thickness[0] + self.cellx_sourcex_distance, 
-                                       0,
-                                       0)
-        
-        # Calculate the size of the source based on the new cell size and forebaffle parameters
-        self.source_size_adjusted = (0, #self.adjusted_cell_size[0] - boundary_thickness[0] - boundary_thickness[1],
-                                     self.adjusted_cell_size[1] - boundary_thickness[2] - boundary_thickness[3],
-                                     0)
-        
-
-        if fb_location == 'down':
-            # Calculate the vertex A of the forebaffle
-            self.fb_vertex_A = (self.source_center_adjusted[0] + self.sourcex_FB_vertex_distance,
-                                -self.adjusted_cell_size[1]/2 + boundary_thickness[2],
-                                0)
-
-
-            # Calculate the Vertex B of the forebaffle
-            self.fb_vertex_B = (self.fb_vertex_A[0] + self.fb_base_length,
-                                self.fb_vertex_A[1] + self.fb_height,
-                                0)
-
-            # Calculate the Vertex C of the forebaffle
-            self.fb_vertex_C = (self.fb_vertex_A[0] + self.fb_base_length,
-                                self.fb_vertex_A[1],
-                                0)
+        vertices : list of mp.Vector3
+            List of vertices to check
             
-            #! NEED TO MAKE THE HEIGHT CONSTANT REGARDLESS OF ANGLE by increasing OR decreasing the size of the cell and shifting the forebaffle accordingly so theyintersect at -window_diameter/2
-            # Check if the Vertex B exceeds or short of the window_diameter/2
-            if self.fb_vertex_B[1] > -(self.window_diameter/2):
-                diff = self.fb_vertex_B[1] - (self.window_diameter/2)
-                # Adjust the cell size, source size, and vertex positions accordingly
-                self.adjusted_cell_size = (self.adjusted_cell_size[0],
-                                           self.adjusted_cell_size[1] - diff,
-                                             0)
-                self.source_size_adjusted = (self.source_size_adjusted[0],
-                                            self.source_size_adjusted[1] - diff,
-                                                0)
-                
-                self.fb_vertex_A = (self.fb_vertex_A[0],
-                                    self.fb_vertex_A[1] - diff,
-                                    0)
-                self.fb_vertex_B = (self.fb_vertex_B[0],
-                                    self.fb_vertex_B[1] - diff,
-                                    0)
-                self.fb_vertex_C = (self.fb_vertex_C[0],
-                                    self.fb_vertex_C[1] - diff,
-                                    0)
-                
-            elif self.fb_vertex_B[1] < -(self.window_diameter/2):
-                diff = -(self.window_diameter/2) - self.fb_vertex_B[1]
-                # Adjust the cell size, source size, and vertex positions accordingly
-                self.adjusted_cell_size = (self.adjusted_cell_size[0],
-                                           self.adjusted_cell_size[1] + diff,
-                                             0)
-                self.source_size_adjusted = (self.source_size_adjusted[0],
-                                            self.source_size_adjusted[1] + diff,
-                                                0)
-                self.fb_vertex_A = (self.fb_vertex_A[0],
-                                    self.fb_vertex_A[1] + diff,
-                                    0)
-                self.fb_vertex_B = (self.fb_vertex_B[0],
-                                    self.fb_vertex_B[1] + diff,
-                                    0)
-                self.fb_vertex_C = (self.fb_vertex_C[0],
-                                    self.fb_vertex_C[1] + diff,
-                                    0)
-
-        elif fb_location == 'up':
-            # Calculate the vertex A of the forebaffle
-            self.fb_vertex_A = (self.source_center_adjusted[0] + self.sourcex_FB_vertex_distance,
-                                self.adjusted_cell_size[1]/2 - boundary_thickness[3],
-                                0)
-
-
-            # Calculate the Vertex B of the forebaffle
-            self.fb_vertex_B = (self.fb_vertex_A[0] + self.fb_base_length,
-                                self.fb_vertex_A[1] - self.fb_height,
-                                0)
-            # Calculate the Vertex C of the forebaffle
-            self.fb_vertex_C = (self.fb_vertex_A[0] + self.fb_base_length,
-                                self.fb_vertex_A[1],
-                                0)
-            
-            #! NEED TO MAKE THE HEIGHT CONSTANT REGARDLESS OF ANGLE by increasing OR decreasing the size of the cell and shifting the forebaffle accordingly so theyintersect at +window_diameter/2
-            # Check if the Vertex B exceeds or short of the window_diameter/2
-            if self.fb_vertex_B[1] < (self.window_diameter/2):
-                diff = (self.window_diameter/2) - self.fb_vertex_B[1]
-                # Adjust the cell size, source size, and vertex positions accordingly
-                self.adjusted_cell_size = (self.adjusted_cell_size[0],
-                                           self.adjusted_cell_size[1] + diff,
-                                                0)
-                
-                self.source_size_adjusted = (self.source_size_adjusted[0],
-                                            self.source_size_adjusted[1] + diff,
-                                                0)
-                self.fb_vertex_A = (self.fb_vertex_A[0],
-                                    self.fb_vertex_A[1] + diff,
-                                    0)
-                
-                self.fb_vertex_B = (self.fb_vertex_B[0],
-                                    self.fb_vertex_B[1] + diff,
-                                    0)
-                self.fb_vertex_C = (self.fb_vertex_C[0],
-                                    self.fb_vertex_C[1] + diff,
-                                    0)
-                
-            elif self.fb_vertex_B[1] > (self.window_diameter/2):
-                diff = self.fb_vertex_B[1] - (self.window_diameter/2)
-                # Adjust the cell size, source size, and vertex positions accordingly
-                self.adjusted_cell_size = (self.adjusted_cell_size[0],
-                                           self.adjusted_cell_size[1] - diff,
-                                                0)
-                
-                self.source_size_adjusted = (self.source_size_adjusted[0],
-                                            self.source_size_adjusted[1] - diff,
-                                                0)
-                self.fb_vertex_A = (self.fb_vertex_A[0],
-                                    self.fb_vertex_A[1] - diff,
-                                    0)
-                self.fb_vertex_B = (self.fb_vertex_B[0],
-                                    self.fb_vertex_B[1] - diff,
-                                    0)
-                self.fb_vertex_C = (self.fb_vertex_C[0],
-                                    self.fb_vertex_C[1] - diff,
-                                    0)
-        else:
-            raise ValueError("fb_location must be either 'up' or 'down'")
-
-        #Set the material for the forebaffle
-        if fb_material is not None:
-            self.material = fb_material
-        else:
-            if fb_epsilon_imag != 0:
-                self.epsilon_real = fb_epsilon_real
-                self.epsilon_imag = fb_epsilon_imag
-                self.conductivity = fb_epsilon_imag * 2 * np.pi * (1/3) / fb_epsilon_real
-                self.material = mp.Medium(epsilon=fb_epsilon_real, D_conductivity=self.conductivity)
-            else:
-                self.material = mp.Medium(epsilon=fb_epsilon_real)
-
-        # Print forebaffle creation details
-        print(f"Forebaffle created at angle={self.fb_angle_degrees}°, "
-              f"hypotenuse={self.fb_hypotenuse}, "
-              f"base_length={self.fb_base_length}, height={self.fb_height}",
-              f"At vertices: A{self.fb_vertex_A}, B{self.fb_vertex_B}, C{self.fb_vertex_C}")
-
-    def assemble(self):
-        """
-        Assemble the forebaffle triangle
-
         Returns
         -------
-        mp.Prism
-            Meep prism object representing the forebaffle
+        list of mp.Vector3
+            Vertices in counter-clockwise order
         """
-        # Create the prism
-        forebaffle = mp.Prism(
-            vertices=[mp.Vector3(*self.fb_vertex_A),
-                      mp.Vector3(*self.fb_vertex_B),
-                      mp.Vector3(*self.fb_vertex_C)],
-            height=mp.inf,
+        # Calculate signed area using shoelace formula
+        n = len(vertices)
+        area = 0
+        for i in range(n):
+            j = (i + 1) % n
+            area += vertices[i].x * vertices[j].y
+            area -= vertices[j].x * vertices[i].y
+        
+        # If area is negative, vertices are clockwise - reverse them
+        if area < 0:
+            return list(reversed(vertices))
+        return vertices
+    
+    def _create_base_absorber(self, v1, v2, layer, parent):
+        """Create absorber along the base edge (v1-v2)."""
+        # Base is horizontal in most cases
+        # Offset perpendicular to the base, outward from the triangle
+        
+        # Determine outward direction
+        # For quadrant 1 (0-90°) and 4 (270-360°), offset downward
+        # For quadrant 2 (90-180°) and 3 (180-270°), offset downward still works
+        angle = parent.angle_degrees
+        
+        if 0 <= angle < 180:
+            # Triangle is above base, offset downward
+            offset_y = -layer.thickness
+            offset_x = 0
+        else:
+            # Triangle is below base, offset upward
+            offset_y = layer.thickness
+            offset_x = 0
+        
+        # Create vertices - order matters for MEEP!
+        vertices = [
+            v1,  # Original edge start
+            v2,  # Original edge end
+            mp.Vector3(v2.x + offset_x, v2.y + offset_y),  # Offset edge end
+            mp.Vector3(v1.x + offset_x, v1.y + offset_y),  # Offset edge start
+        ]
+        
+        # Ensure counter-clockwise ordering
+        vertices = self._ensure_ccw_order(vertices)
+        
+        return mp.Prism(
+            vertices=vertices,
+            height=parent.height,
             axis=mp.Vector3(0, 0, 1),
-            material = self.material
+            material=layer.get_material()
+        )
+    
+    def _create_height_absorber(self, v2, v3, layer, parent):
+        """Create absorber along the height edge (v2-v3)."""
+        # Height is vertical in most cases
+        angle = parent.angle_degrees
+        
+        if 0 <= angle < 90 or 270 <= angle < 360:
+            # Triangle is to the left of height, offset to the right
+            offset_x = layer.thickness
+            offset_y = 0
+        else:
+            # Triangle is to the right of height, offset to the left
+            offset_x = -layer.thickness
+            offset_y = 0
+        
+        vertices = [
+            v2,  # Original edge start
+            v3,  # Original edge end
+            mp.Vector3(v3.x + offset_x, v3.y + offset_y),  # Offset edge end
+            mp.Vector3(v2.x + offset_x, v2.y + offset_y),  # Offset edge start
+        ]
+        
+        vertices = self._ensure_ccw_order(vertices)
+        
+        return mp.Prism(
+            vertices=vertices,
+            height=parent.height,
+            axis=mp.Vector3(0, 0, 1),
+            material=layer.get_material()
+        )
+    
+    def _create_hypotenuse_absorber(self, v1, v3, v2, layer, parent):
+        """
+        Create absorber along the hypotenuse edge (v1-v3).
+        
+        Parameters
+        ----------
+        v1, v3 : mp.Vector3
+            Endpoints of the hypotenuse
+        v2 : mp.Vector3
+            The right-angle vertex (used to determine outward direction)
+        """
+        # Calculate perpendicular direction
+        dx = v3.x - v1.x
+        dy = v3.y - v1.y
+        length = np.sqrt(dx**2 + dy**2)
+        
+        if length == 0:
+            logger.warning("Zero-length hypotenuse detected")
+            return None
+        
+        # Two possible perpendicular directions (90° rotation)
+        perp_x1 = -dy / length
+        perp_y1 = dx / length
+        
+        # Check which direction points away from v2
+        # Vector from midpoint of hypotenuse to v2
+        mid_x = (v1.x + v3.x) / 2
+        mid_y = (v1.y + v3.y) / 2
+        to_v2_x = v2.x - mid_x
+        to_v2_y = v2.y - mid_y
+        
+        # Dot product tells us if perpendicular points toward or away from v2
+        dot = perp_x1 * to_v2_x + perp_y1 * to_v2_y
+        
+        # If dot product is positive, flip the direction
+        if dot > 0:
+            perp_x1 = -perp_x1
+            perp_y1 = -perp_y1
+        
+        # Apply thickness
+        offset_x = perp_x1 * layer.thickness
+        offset_y = perp_y1 * layer.thickness
+        
+        vertices = [
+            v1,  # Original edge start
+            v3,  # Original edge end
+            mp.Vector3(v3.x + offset_x, v3.y + offset_y),  # Offset edge end
+            mp.Vector3(v1.x + offset_x, v1.y + offset_y),  # Offset edge start
+        ]
+        
+        vertices = self._ensure_ccw_order(vertices)
+        
+        return mp.Prism(
+            vertices=vertices,
+            height=parent.height,
+            axis=mp.Vector3(0, 0, 1),
+            material=layer.get_material()
         )
 
-        print(f"Forebaffle assembled with vertices at {self.fb_vertex_A}, {self.fb_vertex_B}, and {self.fb_vertex_C}")
-        print(f"Adjusted cell size: {self.adjusted_cell_size}")
-        print(f"Adjusted source center: {self.source_center_adjusted}")
-        print(f"Adjusted source size: {self.source_size_adjusted}")
-        
-        # Calculate AB length for verification
-        AB_length = np.sqrt((self.fb_vertex_B[0] - self.fb_vertex_A[0])**2 + (self.fb_vertex_B[1] - self.fb_vertex_A[1])**2)
-        print(f"Forebaffle AB length: {AB_length}, Expected hypotenuse: {self.fb_hypotenuse}")
+# * ############################################################################################################
+# * MAIN FOREBAFFLE CLASS
+# * ############################################################################################################
 
-        return forebaffle, self.adjusted_cell_size, self.source_center_adjusted, self.source_size_adjusted, self.fb_base_length, self.fb_height, self.fb_vertex_A, self.fb_vertex_B, self.fb_vertex_C
+class Forebaffle(object):
+    '''
+    Class defining a triangular forebaffle structure.
+    '''
+    def __init__(self,
+                 mpsat_sim,
+                 angle_degrees=30,
+                 x_vertex=None,
+                 y_vertex=None,
+                 base=40,
+                 hypotenuse=70,
+                 height=30,
+                 material=None,
+                 epsilon=5.4,
+                 epsilon_imag=0,
+                 freq=1/3,
+                 name=None,
+                 components: Optional[List[ForebaffleComponent]] = None
+):
+        '''
+        Defines a right angled triangular forebaffle structure with a specific opening angle
 
+        Parameters
+        ----------
+        mpsat_sim : MEEPSAT
+            MEEPSAT simulation object
+        angle_degrees : float, optional
+            Angle of the forebaffle in degrees (default: 30)
+        x_vertex : float, optional
+            X-coordinate of the vertex (default: -300)
+            v1 in the code
+        y_vertex : float, optional
+            Y-coordinate of the vertex (default: bottom of simulation cell)
+            v1 in the code
+        base : float, optional
+            Length of the base of the right angled trianglular forebaffle (default: 40)
+        hypotenuse : float, optional
+            Length of the hypotenuse of the right angled trianglular forebaffle (default: 70)
+        height : float, optional
+            Length of the height of the right angled trianglular forebaffle (default: 30)
+        material : mp.Medium, optional
+            Material for the forebaffle (overrides epsilon if provided)
+        epsilon : float, optional
+            Permittivity of the material (default: 5.4)
+        epsilon_imag : float, optional
+            Imaginary part of permittivity (default: 0)
+        freq : float, optional
+            Frequency for material properties (default: 1/3)
+        name : str, optional
+            Name of the object (default: None)
+        '''
+        self.mpsat_sim = mpsat_sim
+                
+        # Basic parameters
+        self.name = name if name else "Forebaffle"
+        self.object_type = 'Forebaffle'
+        
+        # Geometry parameters
+        self.angle_degrees = angle_degrees
+        self.angle_radians = np.radians(angle_degrees)
+        self.x_vertex = x_vertex if x_vertex is not None else -300
+        self.y_vertex = y_vertex if y_vertex is not None else -self.mpsat_sim.cell_size[1]/2
+        self.base = base
+        self.hypotenuse = hypotenuse
+        self.height = height
+        
+        # Material properties
+        if material is not None:
+            self.material = material
+        else:
+            # Check if imaginary part is provided
+            if epsilon_imag != 0:
+                self.epsilon_real = epsilon
+                self.epsilon_imag = epsilon_imag
+                self.conductivity = epsilon_imag * 2 * np.pi * freq / epsilon
+                self.material = mp.Medium(epsilon=epsilon, D_conductivity=self.conductivity)
+            else:
+                self.material = mp.Medium(epsilon=epsilon)
 
-# class Forebaffle(object):
-#     '''
-#     Class defining a triangular forebaffle structure.
-#     '''
-#     def __init__(self,
-#                  mpsat_sim,
-#                  angle_degrees=30,
-#                  x_vertex=None,
-#                  y_vertex=None,
-#                  leg1_length=40,
-#                  leg2_length=70,
-#                  height=30,
-#                  material=None,
-#                  epsilon=5.4,
-#                  epsilon_imag=0,
-#                  freq=1/3,
-#                  name=None):
-#         '''
-#         Defines a triangular forebaffle structure with a specific angle
-
-#         Parameters
-#         ----------
-#         mpsat_sim : MEEPSAT
-#             MEEPSAT simulation object
-#         angle_degrees : float, optional
-#             Angle of the forebaffle in degrees (default: 30)
-#         x_vertex : float, optional
-#             X-coordinate of the vertex (default: -300)
-#         y_vertex : float, optional
-#             Y-coordinate of the vertex (default: bottom of simulation cell)
-#         leg1_length : float, optional
-#             Length of the first (horizontal) leg (default: 40)
-#         leg2_length : float, optional
-#             Length of the second (angled) leg (default: 70)
-#         height : float, optional
-#             Height of the forebaffle in z-direction (default: 30)
-#         material : mp.Medium, optional
-#             Material for the forebaffle (overrides epsilon if provided)
-#         epsilon : float, optional
-#             Permittivity of the material (default: 5.4)
-#         epsilon_imag : float, optional
-#             Imaginary part of permittivity (default: 0)
-#         freq : float, optional
-#             Frequency for material properties (default: 1/3)
-#         name : str, optional
-#             Name of the object (default: None)
-#         '''
-#         # Sims object
-#         self.mpsat_sim = set_sims_obj(self, mpsat_sim)
-        
-#         # Basic parameters
-#         self.name = name if name else "Forebaffle"
-#         self.object_type = 'Forebaffle'
-        
-#         # Geometry parameters
-#         self.angle_degrees = angle_degrees
-#         self.angle_radians = np.radians(angle_degrees)
-#         self.x_vertex = x_vertex if x_vertex is not None else -300
-#         self.y_vertex = y_vertex if y_vertex is not None else -self.mpsat_sim.cell_size[1]/2
-#         self.leg1_length = leg1_length
-#         self.leg2_length = leg2_length
-#         self.height = height
-        
-#         # Material properties
-#         if material is not None:
-#             self.material = material
-#         else:
-#             # Check if imaginary part is provided
-#             if epsilon_imag != 0:
-#                 self.epsilon_real = epsilon
-#                 self.epsilon_imag = epsilon_imag
-#                 self.conductivity = epsilon_imag * 2 * np.pi * freq / epsilon
-#                 self.material = mp.Medium(epsilon=epsilon, D_conductivity=self.conductivity)
-#             else:
-#                 self.material = mp.Medium(epsilon=epsilon)
+        # Component system for additional features
+        self.components = components if components else []
             
-#         print(f"Forebaffle created: angle={self.angle_degrees}°, "
-#               f"position=({self.x_vertex}, {self.y_vertex}), "
-#               f"legs=({self.leg1_length}, {self.leg2_length})")
 
-#     def __str__(self):
-#         return f"{self.name}: angle={self.angle_degrees}°, height={self.height}"
+    def __str__(self):
+        return f"{self.name}: angle={self.angle_degrees}°, height={self.height}"
+    
+    def calculate_vertices(self):
+        """
+        Calculate the vertices of the triangular forebaffle based on the provided parameters
+        
+        Returns
+        """
+        # Calculate the coordinates of the three vertices
+        v1 = mp.Vector3(self.x_vertex, self.y_vertex)  # Vertex where angle is measured
+        
+        # The right angle is at v2, so we calculate v2 based on the base and angle
 
-#     def assemble(self):
-#         """
-#         Assemble the forebaffle prism
+        perp_height = self.height
+        if 0 <= self.angle_degrees < 90:
+            # Quadrant 1: base right, perpendicular up
+            v2 = mp.Vector3(self.x_vertex + self.base, self.y_vertex)
+            v3 = mp.Vector3(self.x_vertex + self.base, self.y_vertex + perp_height)
+            
+        elif 90 <= self.angle_degrees < 180:
+            # Quadrant 2: base left, perpendicular up
+            v2 = mp.Vector3(self.x_vertex - self.base, self.y_vertex)
+            v3 = mp.Vector3(self.x_vertex - self.base, self.y_vertex + perp_height)
+            
+        elif 180 <= self.angle_degrees < 270:
+            # Quadrant 3: base left, perpendicular down
+            v2 = mp.Vector3(self.x_vertex - self.base, self.y_vertex)
+            v3 = mp.Vector3(self.x_vertex - self.base, self.y_vertex - perp_height)
+            
+        else:  # 270 <= self.angle_degrees < 360
+            # Quadrant 4: base right, perpendicular down
+            v2 = mp.Vector3(self.x_vertex + self.base, self.y_vertex)
+            v3 = mp.Vector3(self.x_vertex + self.base, self.y_vertex - perp_height)
+                
+        print(f"Calculated vertices: v1={v1}, v2={v2}, v3={v3}")
+        print(f"Quadrant: {int(self.angle_degrees // 90) + 1}")
         
-#         Returns
-#         -------
-#         mp.Prism
-#             Meep prism object representing the forebaffle
-#         """
-#         # Calculate the coordinates of the three vertices
-#         v1 = mp.Vector3(self.x_vertex, self.y_vertex)  # Vertex where angle is measured
-#         v2 = mp.Vector3(self.x_vertex + self.leg1_length, self.y_vertex)  # End of first leg (horizontal)
-#         v3 = mp.Vector3(self.x_vertex + self.leg2_length * np.cos(self.angle_radians),
-#                       self.y_vertex + self.leg2_length * np.sin(self.angle_radians))  # End of second leg
-        
-#         # Create the prism
-#         forebaffle = mp.Prism(
-#             vertices=[v1, v2, v3],
-#             height=self.height,
-#             axis=mp.Vector3(0, 0, 1),
-#             material=self.material
-#         )
-        
-#         print(f"Forebaffle assembled with vertices at {v1}, {v2}, and {v3}")
-        
-#         return forebaffle
+        # Consider adding the boundary layer thickness to the vertex positions
+        if self.name == 'Right Forebaffle':
+            boundary_layer_size = self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
+            if boundary_layer_size > 0:
+                # For right forebaffle, we need to consider the boundary layer on the right side
+                v1 = mp.Vector3(v1.x - boundary_layer_size, v1.y)
+                v2 = mp.Vector3(v2.x - boundary_layer_size, v2.y)
+                v3 = mp.Vector3(v3.x - boundary_layer_size, v3.y)
+                print(f"Adjusted vertices for boundary layer: v1={v1}, v2={v2}, v3={v3}")
 
+        elif self.name == 'Left Forebaffle':
+            boundary_layer_size = self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
+            if boundary_layer_size > 0:
+                # For left forebaffle, we need to consider the boundary layer on the left side
+                v1 = mp.Vector3(v1.x + boundary_layer_size, v1.y)
+                v2 = mp.Vector3(v2.x + boundary_layer_size, v2.y)
+                v3 = mp.Vector3(v3.x + boundary_layer_size, v3.y)
+                print(f"Adjusted vertices for boundary layer: v1={v1}, v2={v2}, v3={v3}")
+                
+        elif self.name == 'Top Forebaffle':
+            boundary_layer_size = self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
+            if boundary_layer_size > 0:
+                # For top forebaffle, we need to consider the boundary layer on the top side
+                v1 = mp.Vector3(v1.x, v1.y - boundary_layer_size)
+                v2 = mp.Vector3(v2.x, v2.y - boundary_layer_size)
+                v3 = mp.Vector3(v3.x, v3.y - boundary_layer_size)
+                print(f"Adjusted vertices for boundary layer: v1={v1}, v2={v2}, v3={v3}")
+                
+        elif self.name == 'Bottom Forebaffle':
+            boundary_layer_size = self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
+            if boundary_layer_size > 0:
+                # For bottom forebaffle, we need to consider the boundary layer on the bottom side
+                v1 = mp.Vector3(v1.x, v1.y + boundary_layer_size)
+                v2 = mp.Vector3(v2.x, v2.y + boundary_layer_size)
+                v3 = mp.Vector3(v3.x, v3.y + boundary_layer_size)
+                print(f"Adjusted vertices for boundary layer: v1={v1}, v2={v2}, v3={v3}")
+                
+        else:
+            logger.warning(f"Unknown forebaffle name '{self.name}' - no boundary layer adjustment applied")
+            
+        return v1, v2, v3
+    
+    def add_component(self, component: ForebaffleComponent):
+        """Add a component (e.g., absorber layer) to the forebaffle."""
+        self.components.append(component)
+    
 
+    def assemble(self) -> List[mp.GeometricObject]:
+        """
+        Assemble the forebaffle with all components.
+        
+        Returns
+        -------
+        List[mp.GeometricObject]
+            List of MEEP geometric objects (main structure + components)
+        """
+        v1, v2, v3 = self.calculate_vertices()
+        
+        geometries = []
+        
+        # Main forebaffle structure
+        main_forebaffle = mp.Prism(
+            vertices=[v1, v2, v3],
+            height=self.height,
+            axis=mp.Vector3(0, 0, 1),
+            material=self.material
+        )
+        geometries.append(main_forebaffle)
+        
+        # Add component geometries
+        for component in self.components:
+            geometries.extend(component.get_geometry(self))
+        
+        logger.info(f"Forebaffle assembled with {len(geometries)} geometric objects")
+        
+        return geometries
