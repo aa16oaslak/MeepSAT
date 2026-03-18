@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import List, Optional, Literal
+from dataclasses import dataclass, field
+from typing import List, Optional, Literal, Dict, Any
 import logging
 import sys
 import os
@@ -229,6 +229,7 @@ class ContinuousPlaneWaves():
                  freq = None,
                  wvl = None,
                  angle = 0,
+                 rot_axis= 'x',
                  kwargs= None):
         """
         Parameters
@@ -258,6 +259,9 @@ class ContinuousPlaneWaves():
         angle : float (optional)
             Angle by which the plane wave is rotated w.r.t vertical (default : 0)
 
+        rot_axis : str
+            Axis around which the source is rotated (default : 'x')
+
         **kwargs : dict
             Additional arguments for the meep.Source()
             https://meep.readthedocs.io/en/latest/Python_User_Interface/#source
@@ -274,7 +278,9 @@ class ContinuousPlaneWaves():
         # Frequency and wavelength
         self.freq, self.wvl = set_freq_wvl(self, freq, wvl)
         # Angle of the source
-        self.rot_angle = set_source_angle(self, angle)        
+        self.rot_angle = set_source_angle(self, angle)       
+        # Rotation axis of the source
+        self.rot_axis = rot_axis
         # Additional arguments for both mp.Source() and mp.ContinuousSource()
         self.additional_args = kwargs
 
@@ -285,6 +291,7 @@ class ContinuousPlaneWaves():
         print("Frequency: ", self.freq)
         print("Wavelength: ", self.wvl)
         print("Angle: ", self.rot_angle)
+        print("Rotation axis: ", self.rot_axis)
         print("Additional arguments: ", self.additional_args)
 
     def amp_func(self, P):
@@ -304,10 +311,18 @@ class ContinuousPlaneWaves():
         amp : complex
             Complex amplitude of source at P.
         '''
-
-        k = mp.Vector3(2*np.pi*np.cos(self.rot_angle)/self.wvl,
-                       2*np.pi*np.sin(self.rot_angle)/self.wvl,
-                       0)
+        
+        if self.rot_axis=='x':
+            k = mp.Vector3(2*np.pi*np.cos(self.rot_angle)/self.wvl,
+                        2*np.pi*np.sin(self.rot_angle)/self.wvl,
+                        0)
+        elif self.rot_axis=='y':
+            k = mp.Vector3(2*np.pi*np.sin(self.rot_angle)/self.wvl,
+                        2*np.pi*np.cos(self.rot_angle)/self.wvl,
+                        0)
+        else:
+            raise ValueError("Invalid Rotation axis. Choose either 'x' OR 'y'")
+        
         return np.exp(1j* k.dot(P))
     
     def assemble(self):
@@ -505,7 +520,7 @@ def meep_block(size,
                center, 
                material,
                angle=0,
-               rot_axis='x',
+               rot_axis='z',
                e1=mp.Vector3(1, 0, 0),
                e2=mp.Vector3(0, 1, 0),
                e3=mp.Vector3(0, 0, 1),
@@ -2249,12 +2264,17 @@ class ForebaffleComponent(ABC):
         """Return MEEP geometric objects for this component."""
         pass
     
+    # @abstractmethod
+    # def get_eps_map(self, parent_forebaffle) -> np.ndarray:
+    #     """Return the epsilon map for this component."""
+    #     pass
+
 
 # * ############################################################################################################
 # * DATACLASSES - Configuration classes
 # * ############################################################################################################
 
-
+# Absorbers over Forebaffle sides - base, height, hypotenuse 
 @dataclass
 class AbsorberLayer:
     """Configuration for an absorber layer on a forebaffle side."""
@@ -2449,9 +2469,212 @@ class AbsorberComponent(ForebaffleComponent):
             material=layer.get_material()
         )
 
+#--- FLAIRING ON THE FOREBAFFLE TIP ---#
+@dataclass
+class FlareConfig:
+    """Configuration for a flare extending from a vertex."""
+    # Type of flaring: 
+    # 1. 'linear' - straight line by using mp.Block 
+    # 2. 'spline' - spline function pointing outwards
+    flaring_type: str # Which type of flaring material
+    
+    # The below describes the parameters for each flaring type
+    # 1. linear
+    linear: Dict[str, Any] = field(default_factory=lambda: {
+        "length": 1.0,
+        "thickness": 1.0,
+        "theta2_axis": 'x'
+    })
+    # 2. spline
+    # spline: Dict[str, Any] = field(default_factory=lambda: {
+    #     ""
+    # })
+
+    material: mp.Medium = None # Meep Material
+    epsilon_real: float = 1.0 # Real permittivity
+    epsilon_imag: float = 0.0 # Imaginary permittivity
+    which_vertex: str = 'v3' # From which vertex of the baffle, the user wants to extend the flaring structure (default from the v3)
+    
+    
+
+    def get_material(self, freq: float = 1/3) -> mp.Medium:
+        """Get the material with absorption properties."""
+        if self.material is not None:
+            return self.material
+        return mp.Medium(epsilon=self.epsilon_real, 
+                         D_conductivity=self.epsilon_imag * 2 * np.pi * freq / self.epsilon_real)
+
+class FlairComponent(ForebaffleComponent):
+    """Component representing the flaring structure on the forebaffle tip."""
+    def __init__(self, flairs: List[FlareConfig]):
+        self.flairs = flairs
+        
+    def get_geometry(self, parent_forebaffle) -> List[mp.GeometricObject]:
+        """Generate flair geometries based on parent forebaffle."""
+        geometries = self.create_flairs(parent_forebaffle)
+        return geometries
+    
+    def get_eps_map(self, parent_forebaffle) -> np.ndarray:
+        """Return the epsilon map (flairs don't modify it directly)."""
+        return parent_forebaffle.epsilon_map
+
+    def find_vertex_in_epsilon(self, vertex, parent_forebaffle):
+        """
+        Find the epsilon value at a vertex location in the epsilon map.
+        
+        Parameters
+        ----------
+        vertex : mp.Vector3 or tuple/list
+            Vertex coordinates in real units
+        parent_forebaffle : Forebaffle
+            Parent forebaffle object containing simulation parameters
+            
+        Returns
+        -------
+        float
+            Epsilon value at the vertex location
+            
+        Raises
+        ------
+        ValueError
+            If vertex is outside the epsilon map bounds
+        """
+        # Extract coordinates - handle both mp.Vector3 and tuple/list
+        if isinstance(vertex, mp.Vector3):
+            x, y = vertex.x, vertex.y
+        else:
+            x, y = vertex[0], vertex[1]
+        
+        # Get simulation parameters
+        resolution = parent_forebaffle.mpsat_sim.resolution
+        epsilon_map = parent_forebaffle.epsilon_map
+        
+        # Calculate effective cell size (excluding PML on both sides)
+        pml_thickness = parent_forebaffle.mpsat_sim.factor_dpml * parent_forebaffle.mpsat_sim.dpml
+        xsize = parent_forebaffle.mpsat_sim.cell_size[0] - 4 * pml_thickness
+        ysize = parent_forebaffle.mpsat_sim.cell_size[1] - 4 * pml_thickness
+        
+        # Transform from real coordinates to pixel indices
+        # Real coords: origin at cell center, range [-size/2, +size/2]
+        # Pixel coords: origin at array corner, range [0, size*resolution]
+        x_idx = int((x + xsize / 2) * resolution)
+        y_idx = int((y + ysize / 2) * resolution)
+        
+        # Validate bounds - note: epsilon_map.shape = (rows, cols) = (y_size, x_size)
+        if not (0 <= y_idx < epsilon_map.shape[0] and 
+                0 <= x_idx < epsilon_map.shape[1]):
+            raise ValueError(
+                f"Vertex at ({x:.3f}, {y:.3f}) maps to pixel indices ({x_idx}, {y_idx}), "
+                f"which is outside epsilon map bounds {epsilon_map.shape} (y, x). "
+                f"Valid ranges: y=[0, {epsilon_map.shape[0]-1}], x=[0, {epsilon_map.shape[1]-1}]"
+            )
+        
+        # Access array with [row, col] = [y, x] indexing
+        return epsilon_map[y_idx, x_idx]
+
+    def _get_vertex(self, parent_forebaffle, which_vertex: str):
+        """Get the specified vertex from the parent forebaffle."""
+        v1, v2, v3 = parent_forebaffle.calculate_vertices()
+        vertex_map = {'v1': v1, 'v2': v2, 'v3': v3}
+        
+        if which_vertex not in vertex_map:
+            raise ValueError(f"Invalid vertex '{which_vertex}'. Must be 'v1', 'v2', or 'v3'")
+        
+        return vertex_map[which_vertex]
+
+    def create_flairs(self, parent_forebaffle):
+        """Create all flaring components."""
+        meep_geometry = []
+        
+        # Iterate through all flair configurations
+        for flair_config in self.flairs:
+            vertex = self._get_vertex(parent_forebaffle, flair_config.which_vertex)
+            eps_pixel_at_vertex = self.find_vertex_in_epsilon(vertex, parent_forebaffle)
+            
+            # Check flaring type from the config
+            if flair_config.flaring_type == 'linear':
+                linear_flair = self._create_linear_flair(vertex, eps_pixel_at_vertex, flair_config, parent_forebaffle)
+                meep_geometry.append(linear_flair)
+
+            elif flair_config.flaring_type == 'spline':
+                # self._create_spline_flair(vertex, parent_forebaffle)
+                pass
+            else: 
+                raise ValueError("Please give a valid flairing type")
+        
+        return meep_geometry  # Return only the geometry list, not a tuple
+    
+    def _create_linear_flair(self, vertex, eps_pixel_at_vertex, flair_config, parent_fb):
+        """Create a linear flair extending from the specified vertex."""
+        res = parent_fb.mpsat_sim.resolution
+        characteristic_length = 1 #mm
+        unit_pixel_length = characteristic_length / res
+        linear_params = flair_config.linear
+        length = linear_params["length"]
+        thickness = linear_params["thickness"]
+        theta2 = linear_params["theta2"]
+        theta2_axis = linear_params["theta2_axis"]
+        flair_material = flair_config.get_material()
+
+        # # Calculate the center of the MEEP block using sin-cos approach depending on the rotation axis
+        # if theta2_axis == 'x':
+        #     x_center = vertex.x + thickness * math.cos(theta2)
+        #     y_center = vertex.y + thickness * math.sin(theta2) 
+        # elif theta2_axis == 'y':
+        #     x_center = vertex.x + thickness * math.sin(theta2)
+        #     y_center = vertex.y + thickness * math.cos(theta2)
+        # else:
+        #     raise ValueError("Invalid rotation axis. Must be 'x' or 'y'.")
+
+        angle_rad = math.radians(theta2) if isinstance(theta2, (int, float)) else theta2
+        
+        if theta2_axis == 'x':
+            offset_x = length/2 * math.cos(angle_rad)
+            offset_y = length/2 * math.sin(angle_rad)
+        elif theta2_axis == 'y':
+            offset_x = length/2 * math.sin(angle_rad)
+            offset_y = length/2 * math.cos(angle_rad)
+
+        if theta2<=90:
+            offset_vertex_x = thickness/2 * math.cos(90)
+            offset_vertex_y = thickness/2 * math.sin(90)
+            
+            new_vertex = vertex
+            new_vertex.x = vertex.x - offset_vertex_x
+            new_vertex.y = vertex.y - offset_vertex_y
+            
+            x_center = new_vertex.x + offset_x -unit_pixel_length 
+            y_center = new_vertex.y + offset_y -unit_pixel_length
+
+        elif 90< theta2 < 180:
+            offset_vertex_x = thickness/2 * -math.cos(90)
+            offset_vertex_y = thickness/2 * math.sin(90)
+            
+            new_vertex = vertex
+            new_vertex.x = vertex.x - offset_vertex_x
+            new_vertex.y = vertex.y - offset_vertex_y
+
+            x_center = new_vertex.x + offset_x +unit_pixel_length
+            y_center = new_vertex.y + offset_y +unit_pixel_length
+
+        # x_center = vertex.x + offset_x +unit_pixel_length 
+        # y_center = vertex.y + offset_y +unit_pixel_length
+        # Use meep_block from
+        import meepsat.meep_geometry as mpsat_geom
+
+        # x_center, y_center = x_center - thickness, y_center #- thickness
+        flair_block_meep = mpsat_geom.meep_block(size = mp.Vector3(length, thickness, 0),
+                                                 center = mp.Vector3(x_center, y_center, 0),
+                                                 material = flair_material,
+                                                 angle= theta2,
+                                                 rot_axis= 'z') # This will be always Z
+
+        return flair_block_meep
+    
 # * ############################################################################################################
 # * MAIN FOREBAFFLE CLASS
 # * ############################################################################################################
+
 
 class Forebaffle(object):
     '''
@@ -2459,6 +2682,7 @@ class Forebaffle(object):
     '''
     def __init__(self,
                  mpsat_sim,
+                 epsilon_map,
                  angle_degrees=30,
                  x_vertex=None,
                  y_vertex=None,
@@ -2479,6 +2703,9 @@ class Forebaffle(object):
         ----------
         mpsat_sim : MEEPSAT
             MEEPSAT simulation object
+        epsilon_map: np.ndarray
+            Epsilon map for the whole system
+            This is useful for adding random geometries which are not trivial using MEEPs objects
         angle_degrees : float, optional
             Angle of the forebaffle in degrees (default: 30)
         x_vertex : float, optional
@@ -2504,8 +2731,12 @@ class Forebaffle(object):
         name : str, optional
             Name of the object (default: None)
         '''
-        self.mpsat_sim = mpsat_sim
-                
+        # self.mpsat_sim = mpsat_sim
+        
+        # Sims object
+        self.mpsat_sim = set_sims_obj(self, mpsat_sim)
+        
+        self.epsilon_map = epsilon_map
         # Basic parameters
         self.name = name if name else "Forebaffle"
         self.object_type = 'Forebaffle'
@@ -2650,3 +2881,6 @@ class Forebaffle(object):
         logger.info(f"Forebaffle assembled with {len(geometries)} geometric objects")
         
         return geometries
+    
+
+

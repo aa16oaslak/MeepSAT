@@ -19,9 +19,6 @@ import meepsat.permittivity_components as comp_eps # Importing the components ma
 import meepsat.helpers as exf # Importing the extra functions
 
 
-
-
-
 def calculate_runtime_parameters(source_freq, total_time, animation_timestep, points_per_period=10, 
                                  extraction_offset=10):
     """
@@ -215,9 +212,15 @@ def check_resolution_and_pml(data,
     data : dict
         Updated dictionary containing the simulation parameters (extracted from the json file)
     """
+    
+    
     if meep_sim is None and highest_n is None:
         raise ValueError("Either the MEEP simulation object or the highest refractive index must be provided to check the resolution and PML thickness.")
-
+    
+    # Initialize arrays at the beginning to avoid UnboundLocalError
+    arc_length_arr = []
+    arc_n_arr = []
+    
     #! 0th Step: Check the smallest length scale (wavelength) and convert it into frequency. 
     if smallest_length is not None:
         largest_freq = 1/smallest_length
@@ -490,7 +493,7 @@ def convert_to_meep_units(self, value, unit_type, from_unit='um'):
 
 
 
-
+#! THIS CLASS AND FILE NEEDS A COMPLETE EDITING
 class sim_init():
     """
     For initialising the simulation parameters
@@ -558,10 +561,10 @@ class sim_init():
         
         #==================================
 
-        if resolution/self.freq < 8:
-            raise ValueError('The resolution should be atleast 8 points per wavelength. The grid size should be small enough that it can accurately resolve the wavelength of the electromagnetic wave, but not too small to unnecessarily increase computational requirements.')
-        else:
-            self.resolution = resolution
+        # if resolution/self.freq < 8:
+        #     raise ValueError('The resolution should be atleast 8 points per wavelength. The grid size should be small enough that it can accurately resolve the wavelength of the electromagnetic wave, but not too small to unnecessarily increase computational requirements.')
+        # else:
+        self.resolution = resolution
 
         #==================================
         if boundary_layer_type == 'PML':
@@ -585,8 +588,9 @@ class sim_init():
         
         # ! REST IS IMP: BUT THESE TWO ARE VERY IMPORTANT PARAMETERS FOR THE SIMULATION
         self.meep_geometry = [] # List to store the optical components made using the MEEP functions
-        self.eps_geometry = [] # List to store the optical components made using the epsilon functions
 
+        #! The below is a useless placeholder: Remove it in the future
+        self.eps_geometry = [] # List to store the optical components made using the epsilon functions
 
     def print_simulation_parameters(self):
         """

@@ -207,6 +207,7 @@ cpw_source_init = comp_meep.ContinuousPlaneWaves(mpsat_sim=mpsat_sim,
                                                 component= '{data["component"]}',
                                                 freq= {data["frequecy"]},
                                                 angle= {data["extra_args"]["angle"]},
+                                                rot_axis= '{data["extra_args"].get("rot_axis", "z")}',
                                                 kwargs= {{"is_integrated": {data["extra_args"]["is_integrated"]},
                                                          "start_time": {data["extra_args"]["start_time"]},
                                                          "end_time": {data["extra_args"]["end_time"]}}})
