@@ -2676,6 +2676,432 @@ class FlairComponent(ForebaffleComponent):
 # * ############################################################################################################
 
 
+logger = logging.getLogger(__name__)
+
+
+# * ############################################################################################################
+# * BASE CLASSES - Define abstract base class first
+# * ############################################################################################################
+
+class ForebaffleComponent(ABC):
+    """Abstract base class for forebaffle components."""
+    
+    @abstractmethod
+    def get_geometry(self, parent_forebaffle) -> List[mp.GeometricObject]:
+        """Return MEEP geometric objects for this component."""
+        pass
+    
+    # @abstractmethod
+    # def get_eps_map(self, parent_forebaffle) -> np.ndarray:
+    #     """Return the epsilon map for this component."""
+    #     pass
+
+
+# * ############################################################################################################
+# * DATACLASSES - Configuration classes
+# * ############################################################################################################
+
+# Absorbers over Forebaffle sides - base, height, hypotenuse 
+@dataclass
+class AbsorberLayer:
+    """Configuration for an absorber layer on a forebaffle side."""
+    side: Literal['base', 'height', 'hypotenuse']
+    thickness: float
+    material: mp.Medium = None
+    epsilon_real: float = 1.0
+    epsilon_imag: float = 0.0
+    
+    def get_material(self, freq: float = 1/3) -> mp.Medium:
+        """Get the material with absorption properties."""
+        if self.material is not None:
+            return self.material
+        return mp.Medium(epsilon=self.epsilon_real, 
+                         D_conductivity=self.epsilon_imag * 2 * np.pi * freq / self.epsilon_real)
+
+
+class AbsorberComponent(ForebaffleComponent):
+    """Component that adds absorber layers to forebaffle sides."""
+    
+    def __init__(self, absorber_layers: List[AbsorberLayer]):
+        self.absorber_layers = absorber_layers
+    
+    def get_geometry(self, parent_forebaffle) -> List[mp.GeometricObject]:
+        """Generate absorber layer geometries based on parent forebaffle."""
+        geometries = []
+        v1, v2, v3 = parent_forebaffle.calculate_vertices()
+        
+        for layer in self.absorber_layers:
+            if layer.side == 'base':
+                geom = self._create_base_absorber(v1, v2, layer, parent_forebaffle)
+            elif layer.side == 'height':
+                geom = self._create_height_absorber(v2, v3, layer, parent_forebaffle)
+            elif layer.side == 'hypotenuse':
+                geom = self._create_hypotenuse_absorber(v1, v3, v2, layer, parent_forebaffle)
+            
+            if geom:
+                geometries.append(geom)
+        
+        return geometries
+    
+    def _ensure_ccw_order(self, vertices):
+        """
+        Ensure vertices are in counter-clockwise order using the shoelace formula.
+        
+        Parameters
+        ----------
+        vertices : list of mp.Vector3
+            List of vertices to check
+            
+        Returns
+        -------
+        list of mp.Vector3
+            Vertices in counter-clockwise order
+        """
+        # Calculate signed area using shoelace formula
+        n = len(vertices)
+        area = 0
+        for i in range(n):
+            j = (i + 1) % n
+            area += vertices[i].x * vertices[j].y
+            area -= vertices[j].x * vertices[i].y
+        
+        # If area is negative, vertices are clockwise - reverse them
+        if area < 0:
+            return list(reversed(vertices))
+        return vertices
+    
+    def _create_base_absorber(self, v1, v2, layer, parent):
+        """Create absorber along the base edge (v1-v2)."""
+        # Base is horizontal in most cases
+        # Offset perpendicular to the base, outward from the triangle
+        
+        # Determine outward direction
+        # For quadrant 1 (0-90°) and 4 (270-360°), offset downward
+        # For quadrant 2 (90-180°) and 3 (180-270°), offset downward still works
+        angle = parent.angle_degrees
+        
+        if 0 <= angle < 180:
+            # Triangle is above base, offset downward
+            offset_y = -layer.thickness
+            offset_x = 0
+        else:
+            # Triangle is below base, offset upward
+            offset_y = layer.thickness
+            offset_x = 0
+        
+        # Create vertices - order matters for MEEP!
+        vertices = [
+            v1,  # Original edge start
+            v2,  # Original edge end
+            mp.Vector3(v2.x + offset_x, v2.y + offset_y),  # Offset edge end
+            mp.Vector3(v1.x + offset_x, v1.y + offset_y),  # Offset edge start
+        ]
+        
+        # Ensure counter-clockwise ordering
+        vertices = self._ensure_ccw_order(vertices)
+        
+        return mp.Prism(
+            vertices=vertices,
+            height=parent.height,
+            axis=mp.Vector3(0, 0, 1),
+            material=layer.get_material()
+        )
+    
+    def _create_height_absorber(self, v2, v3, layer, parent):
+        """Create absorber along the height edge (v2-v3)."""
+        # Height is vertical in most cases
+        angle = parent.angle_degrees
+        
+        if 0 <= angle < 90 or 270 <= angle < 360:
+            # Triangle is to the left of height, offset to the right
+            offset_x = layer.thickness
+            offset_y = 0
+        else:
+            # Triangle is to the right of height, offset to the left
+            offset_x = -layer.thickness
+            offset_y = 0
+        
+        vertices = [
+            v2,  # Original edge start
+            v3,  # Original edge end
+            mp.Vector3(v3.x + offset_x, v3.y + offset_y),  # Offset edge end
+            mp.Vector3(v2.x + offset_x, v2.y + offset_y),  # Offset edge start
+        ]
+        
+        vertices = self._ensure_ccw_order(vertices)
+        
+        return mp.Prism(
+            vertices=vertices,
+            height=parent.height,
+            axis=mp.Vector3(0, 0, 1),
+            material=layer.get_material()
+        )
+    
+    def _create_hypotenuse_absorber(self, v1, v3, v2, layer, parent):
+        """
+        Create absorber along the hypotenuse edge (v1-v3).
+        
+        Parameters
+        ----------
+        v1, v3 : mp.Vector3
+            Endpoints of the hypotenuse
+        v2 : mp.Vector3
+            The right-angle vertex (used to determine outward direction)
+        """
+        # Calculate perpendicular direction
+        dx = v3.x - v1.x
+        dy = v3.y - v1.y
+        length = np.sqrt(dx**2 + dy**2)
+        
+        if length == 0:
+            logger.warning("Zero-length hypotenuse detected")
+            return None
+        
+        # Two possible perpendicular directions (90° rotation)
+        perp_x1 = -dy / length
+        perp_y1 = dx / length
+        
+        # Check which direction points away from v2
+        # Vector from midpoint of hypotenuse to v2
+        mid_x = (v1.x + v3.x) / 2
+        mid_y = (v1.y + v3.y) / 2
+        to_v2_x = v2.x - mid_x
+        to_v2_y = v2.y - mid_y
+        
+        # Dot product tells us if perpendicular points toward or away from v2
+        dot = perp_x1 * to_v2_x + perp_y1 * to_v2_y
+        
+        # If dot product is positive, flip the direction
+        if dot > 0:
+            perp_x1 = -perp_x1
+            perp_y1 = -perp_y1
+        
+        # Apply thickness
+        offset_x = perp_x1 * layer.thickness
+        offset_y = perp_y1 * layer.thickness
+        
+        vertices = [
+            v1,  # Original edge start
+            v3,  # Original edge end
+            mp.Vector3(v3.x + offset_x, v3.y + offset_y),  # Offset edge end
+            mp.Vector3(v1.x + offset_x, v1.y + offset_y),  # Offset edge start
+        ]
+        
+        vertices = self._ensure_ccw_order(vertices)
+        
+        return mp.Prism(
+            vertices=vertices,
+            height=parent.height,
+            axis=mp.Vector3(0, 0, 1),
+            material=layer.get_material()
+        )
+
+#--- FLAIRING ON THE FOREBAFFLE TIP ---#
+@dataclass
+class FlareConfig:
+    """Configuration for a flare extending from a vertex."""
+    # Type of flaring: 
+    # 1. 'linear' - straight line by using mp.Block 
+    # 2. 'spline' - spline function pointing outwards
+    flaring_type: str # Which type of flaring material
+    
+    # The below describes the parameters for each flaring type
+    # 1. linear
+    linear: Dict[str, Any] = field(default_factory=lambda: {
+        "length": 1.0,
+        "thickness": 1.0,
+        "theta2_axis": 'x'
+    })
+    # 2. spline
+    # spline: Dict[str, Any] = field(default_factory=lambda: {
+    #     ""
+    # })
+
+    material: mp.Medium = None # Meep Material
+    epsilon_real: float = 1.0 # Real permittivity
+    epsilon_imag: float = 0.0 # Imaginary permittivity
+    which_vertex: str = 'v3' # From which vertex of the baffle, the user wants to extend the flaring structure (default from the v3)
+        
+
+    def get_material(self, freq: float = 1/3) -> mp.Medium:
+        """Get the material with absorption properties."""
+        if self.material is not None:
+            return self.material
+        return mp.Medium(epsilon=self.epsilon_real, 
+                         D_conductivity=self.epsilon_imag * 2 * np.pi * freq / self.epsilon_real)
+
+class FlairComponent(ForebaffleComponent):
+    """Component representing the flaring structure on the forebaffle tip."""
+    def __init__(self, flairs: List[FlareConfig]):
+        self.flairs = flairs
+        
+    def get_geometry(self, parent_forebaffle) -> List[mp.GeometricObject]:
+        """Generate flair geometries based on parent forebaffle."""
+        geometries = self.create_flairs(parent_forebaffle)
+        return geometries
+    
+    def get_eps_map(self, parent_forebaffle) -> np.ndarray:
+        """Return the epsilon map (flairs don't modify it directly)."""
+        return parent_forebaffle.epsilon_map
+
+    def find_vertex_in_epsilon(self, vertex, parent_forebaffle):
+        """
+        Find the epsilon value at a vertex location in the epsilon map.
+        
+        Parameters
+        ----------
+        vertex : mp.Vector3 or tuple/list
+            Vertex coordinates in real units
+        parent_forebaffle : Forebaffle
+            Parent forebaffle object containing simulation parameters
+            
+        Returns
+        -------
+        float
+            Epsilon value at the vertex location
+            
+        Raises
+        ------
+        ValueError
+            If vertex is outside the epsilon map bounds
+        """
+        # Extract coordinates - handle both mp.Vector3 and tuple/list
+        if isinstance(vertex, mp.Vector3):
+            x, y = vertex.x, vertex.y
+        else:
+            x, y = vertex[0], vertex[1]
+        
+        # Get simulation parameters
+        resolution = parent_forebaffle.mpsat_sim.resolution
+        epsilon_map = parent_forebaffle.epsilon_map
+        
+        # Calculate effective cell size (excluding PML on both sides)
+        pml_thickness = parent_forebaffle.mpsat_sim.factor_dpml * parent_forebaffle.mpsat_sim.dpml
+        xsize = parent_forebaffle.mpsat_sim.cell_size[0] - 4 * pml_thickness
+        ysize = parent_forebaffle.mpsat_sim.cell_size[1] - 4 * pml_thickness
+        
+        # Transform from real coordinates to pixel indices
+        # Real coords: origin at cell center, range [-size/2, +size/2]
+        # Pixel coords: origin at array corner, range [0, size*resolution]
+        x_idx = int((x + xsize / 2) * resolution)
+        y_idx = int((y + ysize / 2) * resolution)
+        
+        # Validate bounds - note: epsilon_map.shape = (rows, cols) = (y_size, x_size)
+        if not (0 <= y_idx < epsilon_map.shape[0] and 
+                0 <= x_idx < epsilon_map.shape[1]):
+            raise ValueError(
+                f"Vertex at ({x:.3f}, {y:.3f}) maps to pixel indices ({x_idx}, {y_idx}), "
+                f"which is outside epsilon map bounds {epsilon_map.shape} (y, x). "
+                f"Valid ranges: y=[0, {epsilon_map.shape[0]-1}], x=[0, {epsilon_map.shape[1]-1}]"
+            )
+        
+        # Access array with [row, col] = [y, x] indexing
+        return epsilon_map[y_idx, x_idx]
+
+    def _get_vertex(self, parent_forebaffle, which_vertex: str):
+        """Get the specified vertex from the parent forebaffle."""
+        v1, v2, v3 = parent_forebaffle.calculate_vertices()
+        vertex_map = {'v1': v1, 'v2': v2, 'v3': v3}
+        
+        if which_vertex not in vertex_map:
+            raise ValueError(f"Invalid vertex '{which_vertex}'. Must be 'v1', 'v2', or 'v3'")
+        
+        return vertex_map[which_vertex]
+
+    def create_flairs(self, parent_forebaffle):
+        """Create all flaring components."""
+        meep_geometry = []
+        
+        # Iterate through all flair configurations
+        for flair_config in self.flairs:
+            vertex = self._get_vertex(parent_forebaffle, flair_config.which_vertex)
+            eps_pixel_at_vertex = self.find_vertex_in_epsilon(vertex, parent_forebaffle)
+            
+            # Check flaring type from the config
+            if flair_config.flaring_type == 'linear':
+                linear_flair = self._create_linear_flair(vertex, eps_pixel_at_vertex, flair_config, parent_forebaffle)
+                meep_geometry.append(linear_flair)
+
+            elif flair_config.flaring_type == 'spline':
+                # self._create_spline_flair(vertex, parent_forebaffle)
+                pass
+            else: 
+                raise ValueError("Please give a valid flairing type")
+        
+        return meep_geometry  # Return only the geometry list, not a tuple
+    
+    def _create_linear_flair(self, vertex, eps_pixel_at_vertex, flair_config, parent_fb):
+        """Create a linear flair extending from the specified vertex."""
+        res = parent_fb.mpsat_sim.resolution
+        characteristic_length = 1 #mm
+        unit_pixel_length = characteristic_length / res
+        linear_params = flair_config.linear
+        length = linear_params["length"]
+        thickness = linear_params["thickness"]
+        theta2 = linear_params["theta2"]
+        theta2_axis = linear_params["theta2_axis"]
+        flair_material = flair_config.get_material()
+
+        # # Calculate the center of the MEEP block using sin-cos approach depending on the rotation axis
+        # if theta2_axis == 'x':
+        #     x_center = vertex.x + thickness * math.cos(theta2)
+        #     y_center = vertex.y + thickness * math.sin(theta2) 
+        # elif theta2_axis == 'y':
+        #     x_center = vertex.x + thickness * math.sin(theta2)
+        #     y_center = vertex.y + thickness * math.cos(theta2)
+        # else:
+        #     raise ValueError("Invalid rotation axis. Must be 'x' or 'y'.")
+
+        angle_rad = math.radians(theta2) if isinstance(theta2, (int, float)) else theta2
+        
+        if theta2_axis == 'x':
+            offset_x = length/2 * math.cos(angle_rad)
+            offset_y = length/2 * math.sin(angle_rad)
+        elif theta2_axis == 'y':
+            offset_x = length/2 * math.sin(angle_rad)
+            offset_y = length/2 * math.cos(angle_rad)
+
+        if theta2<=90:
+            offset_vertex_x = thickness/2 * math.cos(90)
+            offset_vertex_y = thickness/2 * math.sin(90)
+            
+            new_vertex = vertex
+            new_vertex.x = vertex.x - offset_vertex_x
+            new_vertex.y = vertex.y - offset_vertex_y
+            
+            x_center = new_vertex.x + offset_x -unit_pixel_length 
+            y_center = new_vertex.y + offset_y -unit_pixel_length
+
+        elif 90< theta2 < 180:
+            offset_vertex_x = thickness/2 * -math.cos(90)
+            offset_vertex_y = thickness/2 * math.sin(90)
+            
+            new_vertex = vertex
+            new_vertex.x = vertex.x - offset_vertex_x
+            new_vertex.y = vertex.y - offset_vertex_y
+
+            x_center = new_vertex.x + offset_x +unit_pixel_length
+            y_center = new_vertex.y + offset_y +unit_pixel_length
+
+        # x_center = vertex.x + offset_x +unit_pixel_length 
+        # y_center = vertex.y + offset_y +unit_pixel_length
+        # Use meep_block from
+        import meepsat.meep_geometry as mpsat_geom
+
+        # x_center, y_center = x_center - thickness, y_center #- thickness
+        flair_block_meep = mpsat_geom.meep_block(size = mp.Vector3(length, thickness, 0),
+                                                 center = mp.Vector3(x_center, y_center, 0),
+                                                 material = flair_material,
+                                                 angle= theta2,
+                                                 rot_axis= 'z') # This will be always Z
+
+        return flair_block_meep
+    
+# * ############################################################################################################
+# * MAIN FOREBAFFLE CLASS
+# * ############################################################################################################
+
+
 class Forebaffle(object):
     '''
     Class defining a triangular forebaffle structure.
@@ -2683,18 +3109,33 @@ class Forebaffle(object):
     def __init__(self,
                  mpsat_sim,
                  epsilon_map,
+                 shape= 'linear',
                  angle_degrees=30,
                  x_vertex=None,
                  y_vertex=None,
-                 base=40,
-                 hypotenuse=70,
-                 height=30,
                  material=None,
-                 epsilon=5.4,
+                 epsilon_real=5.4,
                  epsilon_imag=0,
                  freq=1/3,
                  name=None,
-                 components: Optional[List[ForebaffleComponent]] = None
+                 components: Optional[List[ForebaffleComponent]] = None,
+                 # Linear Forebaffle parameters :
+                 hypotenuse=70,
+                 base=None,
+                 height=None,
+                 # Spline Forebaffle parameters:
+                 num_periods=1,
+                 amplitude=5,
+                 no_of_points=300,
+                 scaling_factor=3,
+                 spline_degree=3,
+                 spline_smoothing=1,
+                 fb_thickness=10,
+                 add_absorber=True,
+                 absorber_side= 'above',
+                 absorber_epsilon_real=5.4,
+                 absorber_epsilon_imag=0,
+                 absorber_thickness=5
 ):
         '''
         Defines a right angled triangular forebaffle structure with a specific opening angle
@@ -2706,6 +3147,9 @@ class Forebaffle(object):
         epsilon_map: np.ndarray
             Epsilon map for the whole system
             This is useful for adding random geometries which are not trivial using MEEPs objects
+        shape: str
+            Shape of the forebaffle (default: 'linear')
+            Available Shapes: ['linear', 'spline']
         angle_degrees : float, optional
             Angle of the forebaffle in degrees (default: 30)
         x_vertex : float, optional
@@ -2722,7 +3166,7 @@ class Forebaffle(object):
             Length of the height of the right angled trianglular forebaffle (default: 30)
         material : mp.Medium, optional
             Material for the forebaffle (overrides epsilon if provided)
-        epsilon : float, optional
+        epsilon_real : float, optional
             Permittivity of the material (default: 5.4)
         epsilon_imag : float, optional
             Imaginary part of permittivity (default: 0)
@@ -2730,46 +3174,115 @@ class Forebaffle(object):
             Frequency for material properties (default: 1/3)
         name : str, optional
             Name of the object (default: None)
+            
+        'THE BELOW PARAMETERS ARE FOR SPLINE FOREBAFFLE DESIGN'
+        num_periods: int, optional (only needed if shape = 'spline')
+            Number of oscillations between start and end (default: 1)
+        amplitude: float, optional (only needed if shape = 'spline')
+            Amplitude of oscillation in mm (default: 5)
+        no_of_points: int, optional (only needed if shape = 'spline')
+            Number of points between start and end (default: 300)
+        scaling_factor: float, optional (only needed if shape = 'spline')
+            Frequency factor for the oscillation (default: 3)
+        spline_degree: int, optional (only needed if shape = 'spline')
+            Degree of the spline (default: 3)
+        spline_smoothing: float, optional (only needed if shape = 'spline')
+            Smoothing factor for the spline (default: 1)
+        fb_thickness: float, optional
+            Thickness of the forebaffle (default: 10)
+        add_absorber: bool, optional
+            Whether to add an absorber layer (default: True)
+        absorber_side: str, optional
+            Which side of the spline to add the absorber (default: 'above')
+            available options: ['above', 'below']
+        absorber_epsilon_real: float, optional
+            Real part of the permittivity for the absorber (default: 5.4)
+        absorber_epsilon_imag: float, optional
+            Imaginary part of the permittivity for the absorber (default: 0)
+        absorber_thickness: float, optional
+            Thickness of the absorber layer (default: 2.0)
         '''
-        # self.mpsat_sim = mpsat_sim
-        
-        # Sims object
-        self.mpsat_sim = set_sims_obj(self, mpsat_sim)
-        
+        self.mpsat_sim = mpsat_sim
         self.epsilon_map = epsilon_map
+        
         # Basic parameters
         self.name = name if name else "Forebaffle"
         self.object_type = 'Forebaffle'
+        self.fb_shape = shape
         
         # Geometry parameters
         self.angle_degrees = angle_degrees
         self.angle_radians = np.radians(angle_degrees)
         self.x_vertex = x_vertex if x_vertex is not None else -300
         self.y_vertex = y_vertex if y_vertex is not None else -self.mpsat_sim.cell_size[1]/2
-        self.base = base
         self.hypotenuse = hypotenuse
-        self.height = height
+
         
-        # Material properties
+        if base is None and height is None:
+            self.base, self.height = self._calculate_base_height_from_angle_hypotenuse(
+                angle_degrees, hypotenuse
+            )
+            print("base",self.base,"\t","height",self.height)
+        elif base is None or height is None:
+            raise ValueError("Either provide hypotenuse + angle OR provide all the sides of the forebaffle.")
+        else:
+            self.base = base
+            self.height = height
+
+        # Material properties to be used in simulation using meep geometries
         if material is not None:
             self.material = material
         else:
+            # Check if epsilon_real is -inf (perfect conductor)
+            if np.isinf(epsilon_real) and epsilon_real < 0:
+                self.material = mp.perfect_electric_conductor
             # Check if imaginary part is provided
-            if epsilon_imag != 0:
-                self.epsilon_real = epsilon
+            elif epsilon_imag != 0:
+                self.epsilon_real = epsilon_real
                 self.epsilon_imag = epsilon_imag
-                self.conductivity = epsilon_imag * 2 * np.pi * freq / epsilon
-                self.material = mp.Medium(epsilon=epsilon, D_conductivity=self.conductivity)
+                self.conductivity = epsilon_imag * 2 * np.pi * freq / epsilon_real
+                self.material = mp.Medium(epsilon=self.epsilon_real, D_conductivity=self.conductivity)
             else:
-                self.material = mp.Medium(epsilon=epsilon)
+                self.material = mp.Medium(epsilon=epsilon_real)
 
         # Component system for additional features
         self.components = components if components else []
-            
+        
+        # Spline parameters
+        if shape == 'spline':
+            self.spline_num_periods = num_periods
+            self.spline_amplitude = amplitude
+            self.spline_no_of_points = no_of_points
+            self.spline_scaling_factor = scaling_factor
+            self.spline_fb_thickness = fb_thickness
+            self.spline_degree = spline_degree
+            self.spline_smoothing = spline_smoothing
+            self.spline_add_absorbers = add_absorber
+            self.spline_absorber_side = absorber_side
+            self.spline_abs_thickness =absorber_thickness
+            self.spline_abs_epsilon_real = absorber_epsilon_real
+            self.spline_abs_epsilon_imag = absorber_epsilon_imag
 
     def __str__(self):
         return f"{self.name}: angle={self.angle_degrees}°, height={self.height}"
     
+    def _calculate_base_height_from_angle_hypotenuse(self, angle_degrees, hypotenuse):
+        angle_radians = np.radians(angle_degrees)
+        # Using ASTC rule from Trigonometry
+        if 0 <= angle_degrees <= 90:
+            base = float(hypotenuse * np.cos(angle_radians))
+            height = float(hypotenuse * np.sin(angle_radians))
+        elif 90 < angle_degrees <= 180:
+            base = float(hypotenuse * -1* np.cos(angle_radians))
+            height = float(hypotenuse * np.sin(angle_radians))  
+        elif 180 < angle_degrees <= 270:
+            base = float(hypotenuse * -1* np.cos(angle_radians))
+            height = float(hypotenuse * -1* np.sin(angle_radians))
+        else:
+            base = float(hypotenuse * np.cos(angle_radians))
+            height = float(hypotenuse * -1* np.sin(angle_radians))
+        return base, height
+
     def calculate_vertices(self):
         """
         Calculate the vertices of the triangular forebaffle based on the provided parameters
@@ -2807,7 +3320,7 @@ class Forebaffle(object):
         
         # Consider adding the boundary layer thickness to the vertex positions
         if self.name == 'Right Forebaffle':
-            boundary_layer_size = self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
+            boundary_layer_size = 0#self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
             if boundary_layer_size > 0:
                 # For right forebaffle, we need to consider the boundary layer on the right side
                 v1 = mp.Vector3(v1.x - boundary_layer_size, v1.y)
@@ -2816,7 +3329,7 @@ class Forebaffle(object):
                 print(f"Adjusted vertices for boundary layer: v1={v1}, v2={v2}, v3={v3}")
 
         elif self.name == 'Left Forebaffle':
-            boundary_layer_size = self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
+            boundary_layer_size = 0#self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
             if boundary_layer_size > 0:
                 # For left forebaffle, we need to consider the boundary layer on the left side
                 v1 = mp.Vector3(v1.x + boundary_layer_size, v1.y)
@@ -2825,7 +3338,7 @@ class Forebaffle(object):
                 print(f"Adjusted vertices for boundary layer: v1={v1}, v2={v2}, v3={v3}")
                 
         elif self.name == 'Top Forebaffle':
-            boundary_layer_size = self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
+            boundary_layer_size = 0#self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
             if boundary_layer_size > 0:
                 # For top forebaffle, we need to consider the boundary layer on the top side
                 v1 = mp.Vector3(v1.x, v1.y - boundary_layer_size)
@@ -2834,7 +3347,7 @@ class Forebaffle(object):
                 print(f"Adjusted vertices for boundary layer: v1={v1}, v2={v2}, v3={v3}")
                 
         elif self.name == 'Bottom Forebaffle':
-            boundary_layer_size = self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
+            boundary_layer_size = 0#self.mpsat_sim.dpml * self.mpsat_sim.factor_dpml
             if boundary_layer_size > 0:
                 # For bottom forebaffle, we need to consider the boundary layer on the bottom side
                 v1 = mp.Vector3(v1.x, v1.y + boundary_layer_size)
@@ -2847,12 +3360,154 @@ class Forebaffle(object):
             
         return v1, v2, v3
     
-    def add_component(self, component: ForebaffleComponent):
-        """Add a component (e.g., absorber layer) to the forebaffle."""
-        self.components.append(component)
-    
 
-    def assemble(self) -> List[mp.GeometricObject]:
+        
+    def _create_spline_forebaffle_with_prisms(self, start_vertex, end_vertex):
+        """
+        Create a spline forebaffle using multiple MEEP prism objects.
+        
+        This creates a stepped approximation of the spline curve using rectangular
+        prism elements, similar to step file export in CAD software.
+        
+        Parameters
+        ----------
+        start_vertex, end_vertex : mp.Vector3
+            Start and end points of the spline
+            
+        Returns
+        -------
+        List[mp.GeometricObject]
+            List of prism objects forming the spline structure
+        """
+        from scipy.interpolate import UnivariateSpline
+        
+        # Get simulation parameters
+        x_start, y_start = start_vertex.x, start_vertex.y
+        x_end, y_end = end_vertex.x, end_vertex.y
+        
+        # Spline parameters
+        num_periods = self.spline_num_periods
+        amplitude = self.spline_amplitude
+        factor = self.spline_scaling_factor
+        no_of_points = self.spline_no_of_points
+        
+        # Generate spline curve
+        x_points = np.linspace(x_start, x_end, num=no_of_points)
+        y_base = np.linspace(y_start, y_end, len(x_points))
+        y_periodic = y_base + amplitude * np.sin(factor * np.pi * num_periods * 
+                                                (x_points - x_start) / (x_end - x_start))
+        # Calculate offset correction before spline
+        y_start_uncorrected = y_periodic[0]
+        y_end_uncorrected = y_periodic[-1]
+        offset_start = y_start - y_start_uncorrected
+        offset_end = y_end - y_end_uncorrected
+        
+        # Apply linear interpolation of offset across the entire curve
+        # This ensures endpoints match while preserving spline shape
+        offset_correction = np.linspace(offset_start, offset_end, len(y_periodic))
+        y_periodic = y_periodic + offset_correction
+
+        # Create smooth spline
+        spline = UnivariateSpline(x_points, y_periodic, k=self.spline_degree, 
+                                s=self.spline_smoothing)
+        
+        # Create prism objects
+        geometries = []
+        thickness = self.spline_fb_thickness
+        
+        # # Create material with proper absorption handling
+        # if self.epsilon_imag != 0:
+        #     # Use conductivity for absorption
+        #     freq = 1/3  # Default frequency
+        #     conductivity = self.epsilon_imag * 2 * np.pi * freq / self.epsilon_real
+        #     material = mp.Medium(epsilon=self.epsilon_real, D_conductivity=conductivity)
+        # else:
+        #     material = mp.Medium(epsilon=self.epsilon_real)
+        material = self.material
+        
+        # Use fewer segments for prism creation (e.g., 1/10 of original points)
+        prism_segments = max(10, no_of_points // 10)  # At least 10 segments
+        x_prism_points = np.linspace(x_start, x_end, prism_segments)
+        
+        for i in range(len(x_prism_points) - 1):
+            x1 = x_prism_points[i]
+            x2 = x_prism_points[i + 1]
+            
+            # Evaluate spline at segment endpoints
+            y1 = float(spline(x1))
+            y2 = float(spline(x2))
+            
+            # Create a quadrilateral prism for this segment
+            # Vertices at top and bottom of the segment
+            v1_bottom = mp.Vector3(x1, y1 - thickness/2)
+            v2_bottom = mp.Vector3(x2, y2 - thickness/2)
+            v2_top = mp.Vector3(x2, y2 + thickness/2)
+            v1_top = mp.Vector3(x1, y1 + thickness/2)
+            
+            # Create prism (quadrilateral)
+            prism = mp.Prism(
+                vertices=[v1_bottom, v2_bottom, v2_top, v1_top],
+                height=self.height,
+                axis=mp.Vector3(0, 0, 1),
+                material=material
+            )
+            geometries.append(prism)
+        
+        # Add absorber layers if needed
+        if self.spline_add_absorbers:
+            # Create absorber material properly
+            if self.spline_abs_epsilon_imag != 0:
+                freq = 1/3
+                abs_conductivity = self.spline_abs_epsilon_imag * 2 * np.pi * freq / self.spline_abs_epsilon_real
+                absorber_material = mp.Medium(epsilon=self.spline_abs_epsilon_real, 
+                                             D_conductivity=abs_conductivity)
+            else:
+                absorber_material = mp.Medium(epsilon=self.spline_abs_epsilon_real)
+            
+            absorber_thickness = self.spline_abs_thickness
+            
+            x_prism_points = np.linspace(x_start, x_end, prism_segments)
+            
+            for i in range(len(x_prism_points) - 1):
+                x1 = x_prism_points[i]
+                x2 = x_prism_points[i + 1]
+                
+                y1 = float(spline(x1))
+                y2 = float(spline(x2))
+                
+                if self.spline_absorber_side in ['above', 'both']:
+                    # Absorber above
+                    v1_inner = mp.Vector3(x1, y1 + thickness/2)
+                    v2_inner = mp.Vector3(x2, y2 + thickness/2)
+                    v2_outer = mp.Vector3(x2, y2 + thickness/2 + absorber_thickness)
+                    v1_outer = mp.Vector3(x1, y1 + thickness/2 + absorber_thickness)
+                    
+                    absorber_prism = mp.Prism(
+                        vertices=[v1_inner, v2_inner, v2_outer, v1_outer],
+                        height=self.height,
+                        axis=mp.Vector3(0, 0, 1),
+                        material=absorber_material
+                    )
+                    geometries.append(absorber_prism)
+                
+                if self.spline_absorber_side in ['below', 'both']:
+                    # Absorber below
+                    v1_outer = mp.Vector3(x1, y1 - thickness/2 - absorber_thickness)
+                    v2_outer = mp.Vector3(x2, y2 - thickness/2 - absorber_thickness)
+                    v2_inner = mp.Vector3(x2, y2 - thickness/2)
+                    v1_inner = mp.Vector3(x1, y1 - thickness/2)
+                    
+                    absorber_prism = mp.Prism(
+                        vertices=[v1_outer, v2_outer, v2_inner, v1_inner],
+                        height=self.height,
+                        axis=mp.Vector3(0, 0, 1),
+                        material=absorber_material
+                    )
+                    geometries.append(absorber_prism)
+        
+        return geometries
+
+    def assemble(self):
         """
         Assemble the forebaffle with all components.
         
@@ -2861,26 +3516,73 @@ class Forebaffle(object):
         List[mp.GeometricObject]
             List of MEEP geometric objects (main structure + components)
         """
-        v1, v2, v3 = self.calculate_vertices()
-        
+        self.v1, self.v2, self.v3 = self.calculate_vertices()
         geometries = []
+                
+        if self.fb_shape == 'linear':
+
+            # Main forebaffle structure
+            main_forebaffle = mp.Prism(
+                vertices=[self.v1, self.v2, self.v3],
+                height=self.height,
+                axis=mp.Vector3(0, 0, 1),
+                material=self.material
+            )
+            
+            geometries.append(main_forebaffle)
+            
+            # Add component geometries
+            for component in self.components:
+                geometries.extend(component.get_geometry(self))
+                    
+            logger.info(f"Forebaffle assembled with {len(geometries)} geometric objects")
+            
+            return geometries
         
-        # Main forebaffle structure
-        main_forebaffle = mp.Prism(
-            vertices=[v1, v2, v3],
-            height=self.height,
-            axis=mp.Vector3(0, 0, 1),
-            material=self.material
-        )
-        geometries.append(main_forebaffle)
+        # elif self.fb_shape == 'spline':
+        #     self.epsilon_map = self._create_spline_forebaffle(epsilon_map= self.epsilon_map,
+        #                                                       start_vertex=v3,
+        #                                                       end_vertex=v1)
+
+        #     logger.info(f"Forebaffle assembled with spline shape. The following parameters were used:\n"
+        #                 f"    start vertex: {v1}\n"
+        #                 f"    end vertex: {v3}\n"
+        #                 f"    forebaffle_epsilon: {self.epsilon_real + self.epsilon_imag * 1j}\n"
+        #                 f"    forebaffle_thickness: {self.spline_fb_thickness}\n"
+        #                 f"    absorber_epsilon: {self.spline_abs_epsilon_real + self.spline_abs_epsilon_imag * 1j}\n"
+        #                 f"    absorber_thickness: {self.spline_abs_thickness}\n"
+        #                 f"    spline_add_absorbers: {self.spline_add_absorbers}\n"
+        #                 f"    spline_absorber_side: {self.spline_absorber_side}")
+            
+        #     return self.epsilon_map
         
-        # Add component geometries
-        for component in self.components:
-            geometries.extend(component.get_geometry(self))
+        # elif self.fb_shape == 'spline':
+            
+        #     geometries = self._create_spline_forebaffle_with_prisms(
+        #         start_vertex=v3,
+        #         end_vertex=v1
+        #     )
+        #     logger.info(f"Forebaffle assembled with {len(geometries)} spline prism segments")
+        #     return geometries
+        elif self.fb_shape == 'spline':
+            
+            # Ensure start_vertex has smaller x-coordinate for monotonic spline
+            start_v = self.v3
+            end_v = self.v1
+            if start_v.x > end_v.x:
+                start_v, end_v = end_v, start_v
+            
+            geometries = self._create_spline_forebaffle_with_prisms(
+                start_vertex=start_v,
+                end_vertex=end_v
+            )
+            logger.info(f"Forebaffle assembled with {len(geometries)} spline prism segments")
+            return geometries
+
+        else:
+            raise ValueError(f"Unknown forebaffle shape '{self.fb_shape}'")
         
-        logger.info(f"Forebaffle assembled with {len(geometries)} geometric objects")
-        
-        return geometries
+
     
 
 

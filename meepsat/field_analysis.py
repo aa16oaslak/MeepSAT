@@ -942,6 +942,7 @@ def meepsat_far_field_fft(y_coords,
                           meep_resolution,
                           wavelength,
                           aper_size,
+                          far_field_distance= None,
                           zero_pad_beam=15,
                           plot_label='MEEPSAT_FFT'):
     import numpy as np
@@ -976,11 +977,24 @@ def meepsat_far_field_fft(y_coords,
     fft_power = fft_efield_normalized**2
     fft_power_dB = 10 * np.log10(fft_power / np.max(fft_power))
 
-    meepsat_dict = {
-        'angle': theta_deg,
-        'power_dB': fft_power_dB,
-        'plot_label': plot_label
-    }
+    # Calculate far field y-coordinates if distance is provided
+    if far_field_distance is not None:
+        y_coords_ff = far_field_distance * np.tan(theta_rad)
+        
+        meepsat_dict = {
+            'angle': theta_deg,  # Keep angles for reference
+            'y_coords_ff': y_coords_ff,  # New: far field y-coordinates
+            'power_dB': fft_power_dB,
+            'plot_label': plot_label,
+            'far_field_distance': far_field_distance
+        }
+    else:
+        # Original behavior: return angles
+        meepsat_dict = {
+            'angle': theta_deg,
+            'power_dB': fft_power_dB,
+            'plot_label': plot_label
+        }
 
     return meepsat_dict
 
