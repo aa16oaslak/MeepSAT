@@ -936,6 +936,37 @@ def grasp_far_field_fft(grasp_data,
     return grasp_fft_dict
 
 
+def centre_the_beam_with_phase_correction(y_coords, efield, wavelength,incidence_angle_deg=0):
+    """
+    Centre beam and apply phase correction for off-axis incidence.
+    
+    Parameters:
+    -----------
+    y_coords : array
+        Y coordinates
+    efield : array
+        Electric field
+    incidence_angle_deg : float
+        Incidence angle in degrees (default 0 for normal incidence)
+    """
+    max_index = np.argmax(np.abs(efield))
+    max_y = y_coords[max_index]
+    
+    # Center coordinates
+    y_coords_centered = y_coords - max_y
+    
+    # For off-axis incidence, apply phase ramp correction
+    if incidence_angle_deg != 0:
+        incidence_angle_rad = np.radians(incidence_angle_deg)
+        # Phase ramp due to tilted wavefront
+        phase_ramp = np.exp(1j * 2 * np.pi * y_coords_centered * np.sin(incidence_angle_rad) / wavelength)
+        efield_centered = efield * phase_ramp
+    else:
+        efield_centered = efield.copy()
+    
+    return y_coords_centered, efield_centered
+
+
 # Similar to grasp_far_field_fft but for MEEP data
 def meepsat_far_field_fft(y_coords,
                           efield,
@@ -944,7 +975,9 @@ def meepsat_far_field_fft(y_coords,
                           aper_size,
                           far_field_distance= None,
                           zero_pad_beam=15,
-                          plot_label='MEEPSAT_FFT'):
+                          plot_label='MEEPSAT_FFT',
+                          incidence_angle_deg = 0,
+                          savepath = None):
     import numpy as np
     from scipy import fft
     print(f"MEEPSAT Resolution: {meep_resolution} points per mm")
@@ -957,6 +990,21 @@ def meepsat_far_field_fft(y_coords,
         efield = efield[aperture_mask]
         y_coords = y_coords[aperture_mask]
         print(f"Data filtered to aperture size of {aper_size} mm. New data length: {len(efield)}")
+        
+        # Centre the beam
+        y_coords, efield = centre_the_beam_with_phase_correction(y_coords, efield, wavelength=wavelength, incidence_angle_deg=incidence_angle_deg)
+
+        # Plot the centered beam and save it
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.plot(y_coords, efield)
+        plt.title('Centered Beam')
+        plt.xlabel('y (mm)')
+        plt.ylabel('Electric Field (V/m)')
+        plt.grid()
+        
+        if savepath:
+            plt.savefig(savepath + f'centered_beam_plot_{plot_label}.png')
 
     #! List of frequencies
     #fft_freq = np.fft.fftfreq(len(list_efields[0])*zero_pad_beam, d = 1/grasp_resolution) 

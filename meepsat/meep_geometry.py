@@ -212,6 +212,43 @@ def set_material_obj(self, epsilon_real, epsilon_imag, freq):
     self.freq = freq
     self.conductivity = epsilon_imag*2*np.pi*freq/epsilon_real
 
+### -- RELEVANT FUNCTIONS FOR BROADBAND SOURCE -- ###
+def set_broadband_freq_wvl(self, central_wvl=None, wvl_min=None, wvl_max=None):
+    """
+    Set the frequency and wavelength for the broadband source
+
+    Parameters
+    ----------
+    self : object
+        Class object
+
+    central_wvl : float
+        Central wavelength of the source in MEEP units (default : None)
+
+    wvl_min : float
+        Minimum wavelength of the source in MEEP units (default : None)
+
+    wvl_max : float
+        Maximum wavelength of the source in MEEP units (default : None)
+
+    Returns
+    -------
+    self.freq : float
+        Frequency of the source in MEEP units
+
+    self.wvl : float
+        Wavelength of the source in MEEP units
+    """
+    self.wvl_min = wvl_min
+    self.wvl_max = wvl_max
+    
+    if central_wvl is None:
+        self.central_wvl = (self.wvl_min + self.wvl_max) / 2
+
+    self.center_freq = 1/self.central_wvl
+    self.freq_width = 1/self.wvl_min - 1/self.wvl_max
+
+    return self.freq_width, self.center_freq
 
 # * ############################################################################################################
 
@@ -352,6 +389,153 @@ class ContinuousPlaneWaves():
         
         print("Continuous plane waves source assembled!")
         return source
+
+
+
+# ~ BROADBAND PLANE WAVES
+class BroadbandPlaneWaveSource():
+    """
+    Class defining the broadband plane waves source
+    """
+    def __init__(self,
+                 mpsat_sim,
+                 center = None,
+                 size = None,
+                 component = None,
+                 central_wvl = None,
+                 wvl_min= None,
+                 wvl_max= None,
+                 angle = 0,
+                 rot_axis= 'x',
+                 kwargs= None):
+        """
+        Parameters
+        ----------
+        mpsat_sim : MEEPSAT
+            MEEPSAT simulation object
+
+        center : mp.Vector3
+            Center of the source in the x, y and z directions (default : mp.Vector3(0, 0, 0))
+            Format : mp.Vector3(x, y, z)
+        
+        size : mp.Vector3
+            Size of the source in the x, y and z directions (default : None)
+            Format : mp.Vector3(sx, sy, sz)
+
+        component : str or meep component
+            Propagating component of the source, can be a string ('Ez', 'Ex', 'Ey', 'Hx', 'Hy', 'Hz')
+            or the actual MEEP component (mp.Ez, mp.Ex, mp.Ey, mp.Hx, mp.Hy, mp.Hz)
+        
+        freq : float
+            Frequency of the source in MEEP units (default : mpsat_sim.freq)
+        
+        wvl : float
+            Wavelength of the source in MEEP units (default : mpsat_sim.wvl)
+            If freq is given, wvl is calculated as 1/freq
+
+        angle : float (optional)
+            Angle by which the plane wave is rotated w.r.t vertical (default : 0)
+
+        rot_axis : str
+            Axis around which the source is rotated (default : 'x')
+
+        **kwargs : dict
+            Additional arguments for the meep.Source()
+            https://meep.readthedocs.io/en/latest/Python_User_Interface/#source
+            https://meep.readthedocs.io/en/latest/Python_User_Interface/#continuoussource
+        """
+        # Sims object
+        self.mpsat_sim = set_sims_obj(self, mpsat_sim)
+        
+        # Centre
+        self.center = set_center(self, center, default_center = mp.Vector3(0, 0, 0))
+        # Size
+        self.size = set_size(self, size, default_size = mp.Vector3(0, self.mpsat_sim.cell_size[1], 0))
+        # Propagating component
+        self.component = set_prop_component(self, component, default_component = mp.Ez)
+        # Frequency and wavelength
+        self.wvl_min, self.wvl_max, self.central_wvl = wvl_min, wvl_max, central_wvl
+        self.freq_width, self.center_freq = set_broadband_freq_wvl(self, central_wvl, wvl_min, wvl_max)
+        # Angle of the source
+        self.rot_angle = set_source_angle(self, angle)       
+        # Rotation axis of the source
+        self.rot_axis = rot_axis
+        # Additional arguments for both mp.Source() and mp.ContinuousSource()
+        self.additional_args = kwargs
+
+        print("Source object created with the following parameters:")
+        print("Center: ", self.center)
+        print("Size: ", self.size)
+        print("Component: ", self.component)
+        print("Central Frequency and Freq Width: ", self.center_freq, self.freq_width)
+        print("Wavelength Range and Central Wavelength:", self.wvl_min, self.wvl_max, self.central_wvl)
+        print("Angle: ", self.rot_angle)
+        print("Rotation axis: ", self.rot_axis)
+        print("Additional arguments: ", self.additional_args)
+
+    def amp_func(self, P):
+        '''
+        Adopted from MEEPART package
+        ---
+        Returns amplitude of source with added phase to 
+        emulate source rotation
+
+        Parameters
+        ---------
+        P : mp.Vector3
+            Meep position object at which the source is evaluated.
+
+        Returns
+        -------
+        amp : complex
+            Complex amplitude of source at P.
+        '''
+        
+        if self.rot_axis=='x':
+            k = mp.Vector3(2*np.pi*np.cos(self.rot_angle)/(1/self.wvl_max),
+                        2*np.pi*np.sin(self.rot_angle)/(1/self.wvl_max),
+                        0)
+        elif self.rot_axis=='y':
+            k = mp.Vector3(2*np.pi*np.sin(self.rot_angle)/(1/self.wvl_max),
+                        2*np.pi*np.cos(self.rot_angle)/(1/self.wvl_max),
+                        0)
+        else:
+            raise ValueError("Invalid Rotation axis. Choose either 'x' OR 'y'")
+        
+        return np.exp(1j* k.dot(P))
+
+    
+    def assemble(self):
+        """
+        Return Broadband planewave Pulse
+        """
+        if self.additional_args is not None:
+            source_filtered_kwrg = exf.filter_dict(self.additional_args, mp.Source)
+            print("Additional arguments for the Source: ", source_filtered_kwrg)
+            source_type_filtered_kwrg = exf.filter_dict(self.additional_args, mp.GaussianSource)
+            print("Additional arguments for the GaussianSource: ", source_type_filtered_kwrg)
+
+            source = mp.Source(mp.GaussianSource(frequency= self.center_freq,
+                                                fwidth= 2*self.freq_width,
+                                                **source_type_filtered_kwrg),
+                            center= self.center,
+                            size= self.size,
+                            component=self.component,
+                            # amp_func=self.amp_func,
+                            **source_filtered_kwrg)
+            
+        else:
+            source = mp.Source(mp.GaussianSource(frequency= self.center_freq,
+                                                fwidth= 2*self.freq_width),
+                            center= self.center,
+                            size= self.size,
+                            component=self.component)#,
+                            # amp_func=self.amp_func)
+        
+        print("Broadband plane waves source assembled!")
+        return source
+
+
 
 class GaussianBeam():
 
@@ -597,7 +781,7 @@ class ApertureStop(object):
                  material= None,
                  conductivity = mp.inf,
                  rot_axis = 'x',
-                 rot_angle = 0,
+                 rot_angle = 0,                 
                  y_centre_offset = [0,0],
                  y_size_offset = [0,0]):
         '''
@@ -608,7 +792,8 @@ class ApertureStop(object):
         mpsat_sim : object
             MEEPSAT simulation object
         type: str
-            Type of the aperture stop- circular, square etc       
+            Type of the aperture stop: 
+                circular, square, arrow, etc.
         diameter : float 
             Diameter of the aperture stop opening
         pos_x : float, optional
@@ -645,15 +830,15 @@ class ApertureStop(object):
         # Set position based on which one is provided
         if pos_x is not None:
             # Convert the pos_x in (0,x) coordinate system to (-x/2, x/2)
-            self.pos_x = pos_x - self.mpsat_sim.cell.x/2
+            self.pos_x = pos_x #- self.mpsat_sim.cell.x/2
             self.pos_y = None
             self.orientation = 'vertical'  # Blocks oriented vertically (along y-axis)
         else:
             # Convert the pos_y in (0,y) coordinate system to (-y/2, y/2)
-            self.pos_y = pos_y - self.mpsat_sim.cell.y/2
+            self.pos_y = pos_y #- self.mpsat_sim.cell.y/2
             self.pos_x = None
             self.orientation = 'horizontal'  # Blocks oriented horizontally (along x-axis)
-                          
+
         self.diameter = diameter        
         self.permittivity = n_refr**2   
         self.conductivity = conductivity
@@ -666,6 +851,7 @@ class ApertureStop(object):
 
         print(f"Aperture stop created with orientation: {self.orientation}")
         print("type material: ", self.material)
+        
 
     def square_aperture(self):
         '''

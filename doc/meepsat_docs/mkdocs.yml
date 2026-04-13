@@ -1,0 +1,4 @@
+site_name: MeepSAT Documentation
+
+theme:
+  name: readthedocs

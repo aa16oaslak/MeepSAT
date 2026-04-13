@@ -1,0 +1,15 @@
+The following directory tree contains the documentation contents of MeepSAT using `mkdocs`.
+
+### How to use this docuemntation directory?
+
+To build and visualize the HTML documentation locally using the mkdocs package (useful for verifying changes on your local machine before committing), first install mkdocs in a conda environment.
+
+```bash
+pip install mkdocs
+```
+
+To preview your documentation with live reload enabled:
+
+```bash
+python -m mkdocs serve --livereload
+```
