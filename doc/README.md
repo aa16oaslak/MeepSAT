@@ -8,6 +8,11 @@ To build and visualize the HTML documentation locally using the mkdocs package (
 pip install mkdocs
 ```
 
+Also install the following packages as well:
+```bash
+pip install pymdown-extensions
+```
+
 To preview your documentation with live reload enabled:
 
 ```bash

@@ -328,7 +328,7 @@ singularity build meepsat.sif meepsat.def
 
 The above command creates a `meepsat.sif` file containing the complete MeepSAT environment with all dependencies. 
 
-**Editing/Updating the sif file**
+## Editing/Updating the sif file
 
 There are mainly two ways of how you can update/edit your SIF file:
 
