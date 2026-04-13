@@ -13,7 +13,7 @@ Also install the following packages as well:
 pip install pymdown-extensions
 ```
 
-To preview your documentation with live reload enabled:
+To preview your documentation with live reload enabled, go to the docs directory `../doc/meepsat_docs/`:
 
 ```bash
 python -m mkdocs serve --livereload
