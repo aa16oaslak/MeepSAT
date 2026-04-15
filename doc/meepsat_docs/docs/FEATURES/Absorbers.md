@@ -37,6 +37,8 @@ Assuming p to be the base, h be the height of the absorber and $\theta$ be the a
 
 $$\alpha(l) = \left(\frac{p - 2\tan(\theta)l}{p}\right)^2$$
 
+`Note`: We want to have one geometry such that it mimics the original or simple pyramid shape that usually all the absorbers have. Therefore [Singh et al.(2026)](https://arxiv.org/pdf/2511.05309) define it directly from the point of view of geometry and not impedance.
+
 - Linear
 
 $$Z_{\text{lin}}(l) = (\frac{Z_1 - Z_0}{h})l + Z_0$$
@@ -60,3 +62,4 @@ The geometry of the absorber can then be constructed along the height h via
 $$p^2 \alpha(l)$$
 
 ## Implementation in MeepSAT
+
