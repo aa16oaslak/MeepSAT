@@ -73,7 +73,7 @@ Due to the complex dependencies of the MEEP FDTD software, it is highly recommen
 
 4. **Check if everything is working with MeepSAT import or not**
     ```bash
-    python -c 'import meep as mp; import MeepSAT as mpsat; print("Yayy!")'
+    python -c 'import meep as mp; import meepsat as mpsat; print("Yayy!")'
     ```
 
 5. **For updating things to the latest version of MeepSAT, just use git pull**
