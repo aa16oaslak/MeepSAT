@@ -2456,11 +2456,18 @@ class Absorbers:
                  substrate_thickness=None,
                  substrate_material=None,
                  add_substrate = False,
-                 default_substrate_material = 1,
                  mesh_filter_option='min',
+                 # Absorber Material Properties
                  epsilon_r=None,
                  epsilon_i=None,
                  material=None,
+                 freq= None,
+                 material_type='narrow_bandwidth_absorption',
+                 # Two points for placing N-number of absorbers between those two points in a straight line
+                 start_point = None,
+                 end_point = None,
+                 overall_factor= 0.95,
+                 # Plotting parameters
                  plot_alpha=False,
                  plot_profile=False,
                  plot_mesh= False,
@@ -2487,20 +2494,33 @@ class Absorbers:
         # Absorber material and impedance properties
         self.epsilon_r = epsilon_r
         self.epsilon_i = epsilon_i
+        
         if material:
             self.material = material
             # Update epsilon_r for create_absorber_from_profile function later
             self.epsilon_r = material.epsilon
+            
+        if epsilon_r and epsilon_i:
+            if material_type == 'narrow_bandwidth_absorption':
+                if freq is None:
+                    raise ValueError("Please give the frequency value for the narrow_bandwidth_absorption material.")
+                print("Creating narrow bandwidth absorption material using the following instructions: https://meep.readthedocs.io/en/latest/Materials/#conductivity-and-complex")
+                D_conductivity = (epsilon_i * 2 * math.pi * freq) / epsilon_r
+                self.material = mp.Medium(epsilon=epsilon_r, D_conductivity=D_conductivity)    
         elif epsilon_r:
             self.material = mp.Medium(epsilon=epsilon_r)
-        elif epsilon_i:
-            D_conductivity = epsilon_i * 2 * np.pi * freq / epsilon_r
-            self.material = mp.Medium(epsilon=epsilon_r, D_conductivity=D_conductivity)
         else:
             raise ValueError("Invalid material properties")
-        
-        self.z0 = z0
-        self.z1 = z1
+                
+        if z0 is None:
+            self.z0 = 1
+        else:
+            self.z0 = z0
+
+        if z1 is None:
+            self.z1 = 1/math.sqrt(epsilon_r)
+        else:
+            self.z1 = z1
 
         # Type of the taper
         self.taper_type = taper_type # ['Pyramidal', 'linear', 'exponential']
@@ -2526,6 +2546,12 @@ class Absorbers:
         # Triangular mesh option
         self.mesh_filter_option = mesh_filter_option
 
+        # Placing N number of absorbers between two points
+        # if start_point is not None and end_point is not None:
+        self.start_point = start_point
+        self.end_point = end_point
+        self.overall_factor = overall_factor
+        
         # Plotting options
         self.plot_alpha = plot_alpha
         self.plot_profile = plot_profile
@@ -2540,7 +2566,7 @@ class Absorbers:
             # Save in the current director
             self.savepath = './'
 
-    def assemble(self):
+    def assemble_single_absorber(self):
         # Calculate the filling factor (alpha_array) 
         if self.taper_type == "Pyramidal":
             self.alpha_array = self.alpha_pyramidal(self.p, self.theta, self.l_array)
@@ -2592,6 +2618,73 @@ class Absorbers:
             self.geometry_objects.append(self.absorber_prisms)
 
         
+        return self.geometry_objects
+    
+    def assemble(self):
+        if self.start_point is None and self.end_point is None:
+            return self.assemble_single_absorber()
+        else:
+            return self.place_absorbers_between(self.start_point, self.end_point)
+
+    def place_absorbers_between(self, start_point, end_point):
+        print("Placing absorbers between points:", start_point, "and", end_point)
+
+        # Calculate the direction vector
+        direction = np.array(end_point) - np.array(start_point)
+        direction_normalized = direction / np.linalg.norm(direction)
+        distance = np.linalg.norm(direction)
+
+        # Adjust start/end points to account for absorber width
+        start_point = np.array(start_point) + (self.p / 2) * direction_normalized
+        end_point = np.array(end_point) - (self.p / 2) * direction_normalized
+        distance = np.linalg.norm(end_point - start_point)
+
+        # Calculate number of absorbers with overlap factor to eliminate gaps
+        # Use slightly smaller spacing to ensure overlap
+        overlap_factor = self.overall_factor  # 95% of p spacing = 5% overlap
+        num_absorbers = int(np.ceil(distance / (self.p * overlap_factor)))
+
+        # Calculate perpendicular direction
+        perp_direction = np.array([-direction_normalized[1], direction_normalized[0]])
+        angle_rad = np.arctan2(perp_direction[1], perp_direction[0])
+        angle_deg = np.rad2deg(angle_rad)
+
+        # Store original orientation and angle_axis
+        original_orientation = self.orientation
+        original_angle_axis = self.angle_axis
+
+        self.orientation = angle_deg
+        self.angle_axis = "x"
+
+        print(f"Line angle: {np.rad2deg(np.arctan2(direction_normalized[1], direction_normalized[0])):.2f}°")
+        print(f"Absorber orientation (perpendicular): {angle_deg:.2f}°")
+        print(f"Direction: {direction_normalized}")
+        print(f"Perpendicular: {perp_direction}")
+
+        # Place absorbers with overlap to eliminate gaps
+        absorber_centers = []
+        spacing = distance / num_absorbers  # Evenly distribute absorbers
+        
+        for i in range(num_absorbers):
+            center = start_point + (i + 0.5) * spacing * direction_normalized
+            # Check if absorber center is within grid bounds
+            if (-self.grid_size_sx/2 <= center[0] <= self.grid_size_sx/2 and 
+                -self.grid_size_sy/2 <= center[1] <= self.grid_size_sy/2):
+                absorber_centers.append(center)
+
+        print(f"Calculated {len(absorber_centers)} absorber centers with spacing: {spacing:.2f}mm")
+        print("Absorber centers:", absorber_centers)
+
+        # Create absorbers at each center position
+        for center in absorber_centers:
+            self.center_x_mm = center[0]
+            self.center_y_mm = center[1]
+            self.assemble_single_absorber()
+
+        # Restore original orientation
+        self.orientation = original_orientation
+        self.angle_axis = original_angle_axis
+
         return self.geometry_objects
 
     def _plot_alpha(self):
@@ -2883,8 +2976,7 @@ class Absorbers:
                 print(f"Substrate size: ({size_x_substrate_mm:.2f}, {size_y_substrate_mm:.2f}) mm")
                 print(f"Substrate center: ({centre_x_substrate_mm:.2f}, {centre_y_substrate_mm:.2f}) mm")
                 print(f"Substrate angle: {angle_substrate[i]}")
-                
-                
+                print(f"Substrate thickness: {substrate_thickness_mm:.2f} mm")
                 
                 substrate = comp_meep.meep_block(
                     size=mp.Vector3(size_x_substrate_mm, 
