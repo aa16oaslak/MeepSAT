@@ -74,7 +74,7 @@ def calculate_runtime_parameters(source_freq, total_time, animation_timestep, po
     return runtime_params
 
 def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_name, 
-                          size_x, size_y, vmin=0.5, vmax=3, cmap='viridis', 
+                          size_x, size_y, vmin=0.5, vmax=3, cmap='viridis', show_plot= False,
                           figsize=(8, 4), dpi=300, return_epsilon=False, focalplane_x=None,
                           plot_pml=True, pml_thickness=None, pml_color='red', pml_alpha=0.2):
     """
@@ -171,7 +171,10 @@ def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_na
     ax.set_ylabel('Y (mm)')
     ax.set_title('Epsilon Map with Boundary Layers')
     plt.savefig(os.path.join(savepath, f"{filename_prefix}.png"), dpi=dpi, bbox_inches='tight')
-    plt.close()
+    if show_plot:
+        plt.show()
+    else:
+        plt.close()
     
     # Save the epsilon map to an HDF5 file
     h5_filename = os.path.join(savepath, f"{filename_prefix}.h5")

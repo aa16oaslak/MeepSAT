@@ -9,7 +9,7 @@
           "y": 54,
           "z": 0
         },
-        "resolution": 20,
+        "resolution": 3,
         "smallest_freq": 0.25
       } 
     },
@@ -21,8 +21,8 @@
     "boundary_layers": {
       "boundary": {
         "type": "PML",
-        "size": 2.2,
-        "factor_dpml": 2
+        "size": 2,
+        "factor_dpml": 1
       }
     },
     
