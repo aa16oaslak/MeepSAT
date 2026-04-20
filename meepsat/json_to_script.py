@@ -1,28 +1,8 @@
 import json
 import os
 
-### VARIOUS SIMULATION SCRIPT SEGMENTS ###
 #! THE FOLLOWING FUNCTION MIGHT CAUSE ERRORS IF THE PATHS ARE NOT SET CORRECTLY
-# def temporary_meepasat_path_set():
-#     script = f"""
-# import sys
-# import os
 
-# # Dynamically determine the path to the MEEPSAT library
-# notebook_dir = os.path.dirname(os.path.abspath('../../../../'))
-# main_dir = os.path.join(notebook_dir)#, 'meepsat')
-# meepsat_dir = os.path.join(main_dir, 'meepsat')
-# sys.path.append(main_dir)
-# sys.path.append(meepsat_dir)
-
-# print('The path to the notebook directory is:', notebook_dir)
-# print('The path to the main directory is:', main_dir)
-# print('The path to the MEEPSAT library is:', meepsat_dir)
-
-# # For saving the output generated from this Tutorial
-# savepath = os.path.join(os.path.dirname(os.path.abspath('./')), 'output_files/')
-# """
-#     return script
 
 def temporary_meepasat_path_set(json_data=None):
     # Check if savepath is provided in JSON data
@@ -312,50 +292,6 @@ def convert_string_to_object_reference(value, param_name=None):
     # For non-string values, return as-is
     return value
 
-# def add_lens(data):
-#     if "lenses" not in data:
-#         return ""  # Empty string since the lens is not a mandatory component
-#     else:
-#         script = ""
-#         for lens in data["lenses"]:
-#             lens_data = data["lenses"][lens]
-            
-#             # Build a dictionary of parameters with appropriate conversions
-#             params = {}
-#             for key, value in lens_data.items():
-#                 params[key] = convert_string_to_object_reference(value, key)
-            
-#             script += f"""
-# #~ Adding Lens: {lens}
-# {lens}_init = comp_eps.AsphericLens(name = {params['name']},
-#                                 r1 = {params['r1']},
-#                                 r2 = {params['r2']},
-#                                 c1 = {params['c1']},
-#                                 c2 = {params['c2']},
-#                                 thick = {params['thick']},
-#                                 diameter = {params['diameter']},
-#                                 x = {params['x']},
-#                                 n_refr= {params['n_refr']},
-#                                 AR_left= {params['AR_left']},
-#                                 AR_right= {params['AR_right']},
-#                                 AR_material= {params['AR_material']},
-#                                 eps= epsilon_map,
-#                                 mpsat_sim= mpsat_sim)
-
-# {lens} = {lens}_init.assemble()
-# mpsat_sim.add_eps_geometry({lens})
-# # Plot the lens
-# # {lens}_init.plot_lenses()
-# """
-        
-#         # Add code to save epsilon map
-#         script += f"""
-# #~ Saving the Epsilon Map
-# # Saving the epsilon_map initiated after the final to a .h5 file, so that meep can read it
-# {lens}_init.write_h5file(filename= savepath + '{data["output"]["epsilon_h5_file"]["filename"]}_epsilon_map',
-#                         parallel= {data["simulation"]["parallel"]}) # Make it True if you runnning the code in parallel
-# """
-#         return script
 
 def add_lens(data):
     if "lenses" not in data:
@@ -452,42 +388,6 @@ mpsat_sim.add_eps_geometry({lens})
         return script
     
 
-#         # Add code to save epsilon map
-#         script += f"""
-# #~ Saving the Epsilon Map
-# # Saving the epsilon_map initiated after the final to a .h5 file, so that meep can read it
-# {lens}_init.write_h5file(filename= savepath + '{data["output"]["epsilon_h5_file"]["filename"]}_epsilon_map',
-#                         parallel= {data["simulation"]["parallel"]}) # Make it True if you runnning the code in parallel
-# """
-#         return script
-
-#^====================================================================================================================^#
-# def square_aperture(aperture_data, aperture_name):
-#     # Handle the special mp.inf case for conductivity
-#     if aperture_data["conductivity"] == "mp.inf":
-#         conductivity = "mp.inf"
-#     else:
-#         conductivity = aperture_data["conductivity"]
-        
-#     script = f"""
-# #~ Adding Aperture: Square
-# {aperture_name}_init = comp_meep.ApertureStop(mpsat_sim=mpsat_sim,
-#                                        type='{aperture_data["type"]}',
-#                                        diameter={aperture_data["diameter"]},
-#                                        pos_x={aperture_data["pos_x"]},
-#                                        thickness={aperture_data["thickness"]},
-#                                        n_refr={aperture_data.get("n_refr", 1.0)},
-#                                        conductivity={conductivity},
-#                                        material={aperture_data.get("material", "None")},
-#                                        y_centre_offset={aperture_data.get("y_centre_offset", [0, 0])},
-#                                        y_size_offset={aperture_data.get("y_size_offset", [0, 0])}
-# )
-
-# {aperture_name}_up, {aperture_name}_down = {aperture_name}_init.assemble()
-# mpsat_sim.add_meep_geometry({aperture_name}_up)
-# mpsat_sim.add_meep_geometry({aperture_name}_down)
-# """
-#     return script
 
 def square_aperture(aperture_data, aperture_name):
     # Handle the special mp.inf case for conductivity
@@ -709,63 +609,6 @@ def at_end_command_for_flux_monitors(at_end_list):
 
     return command.rstrip(",\n")  # Remove trailing comma and newline if present
 
-# Add this function to handle flux monitors
-# def add_flux_monitor(data):
-#     """
-#     Create code for adding flux monitors defined in the JSON file
-#     """
-#     script = ""
-    
-#     # Check if flux monitors are present in the data
-#     if "flux_monitor" not in data:
-#         return script  # Empty string since flux monitors are not mandatory
-#     else:
-#         script += "\n#~ Adding Flux Monitors\nflux_monitor_list = []\n"
-        
-#         for monitor_name, monitor_data in data["flux_monitor"].items():
-#             # Special handling for Python objects in the JSON
-#             center = monitor_data["center"]
-#             size = monitor_data["size"]
-#             direction = monitor_data.get("direction", "mp.X")
-#             monitor_type = monitor_data.get("monitor_type", "transmission")
-#             freq_min = monitor_data.get("freq_min", "None")
-#             freq_max = monitor_data.get("freq_max", "None")
-#             nfreq = monitor_data.get("nfreq", 100)
-            
-#             script += f"""
-# # Flux Monitor: {monitor_name}
-# {monitor_name}_init = comp_meep.FluxMonitor(
-#     mpsat_sim=mpsat_sim,
-#     name='{monitor_name}',
-#     center={center},
-#     size={size},
-#     direction={direction},
-#     freq_min={freq_min},
-#     freq_max={freq_max},
-#     nfreq={nfreq},
-#     monitor_type='{monitor_type}'
-# )
-# {monitor_name}_region = {monitor_name}_init.assemble()
-# flux_monitor_list.append({{"{monitor_name}": [{monitor_data}, {monitor_name}_region]}})
-# """
-        
-#         # Add code to initialize the flux monitor registry
-#         script += "\n# Initialize the flux monitor registry\n"
-#         script += "mp_sim_run.set_flux_monitor_registry(flux_monitor_list, "
-        
-#         # Add directory if specified
-#         if "output" in data and "flux_monitor_data_dir" in data["output"]:
-#             script += f"monitor_data_save_dir='{data['output']['flux_monitor_data_dir']}', "
-#         else:
-#             script += "monitor_data_save_dir=savepath + 'flux_monitor_data/', "
-        
-#         # Add save frequency if specified
-#         if "output" in data and "flux_monitor_save_freq" in data["output"]:
-#             script += f"monitor_data_save_freq={data['output']['flux_monitor_save_freq']})\n"
-#         else:
-#             script += "monitor_data_save_freq=10)\n"
-        
-#         return script
 
 def add_flux_monitor(data):
     """
@@ -836,31 +679,6 @@ flux_monitor_list.append({{"{monitor_name}": [{monitor_data}, {monitor_name}_reg
         return script
 
 #^====================================================================================================================^#
-# def init_meep_sim_object(data):
-#     script = f"""
-# # Initialize the meep simulation object with the different parameters
-# sim = mpsat_sim.meep_sim_obj(cell_size= mpsat_sim.cell,
-#                             boundary_layers= [pml],
-#                             geometry= mpsat_sim.meep_geometry,
-#                             sources= source_list,
-#                             epsilon_h5_file= savepath + '{data["output"]["epsilon_h5_file"]["filename"]}_epsilon_map')
-# """
-#     return script
-
-# def init_meep_sim_object(data):
-#     """
-#     Create the MEEP simulation object
-#     """
-#     script = f"""
-# # Initialize the meep simulation object with the different parameters
-# sim = mpsat_sim.meep_sim_obj(cell_size= mpsat_sim.cell,
-#                             boundary_layers= [pml],
-#                             geometry= mpsat_sim.meep_geometry,
-#                             sources= source_list,
-#                             epsilon_h5_file= savepath + '{data["output"]["epsilon_h5_file"]["filename"]}_epsilon_map')
-# """
-#     return script
-
 def init_meep_sim_object(data):
     """
     Create the MEEP simulation object with optional epsilon map handling
@@ -941,73 +759,6 @@ monitor_list.append({{"{monitor_name}": [{monitor_data}, {monitor_name}_obj]}})
         
         return script
     
-# def init_monitors_in_mp_sim_run(monitor_list):
-#     """
-#     Initialize monitors in the mp_sim_run object
-    
-#     Parameters
-#     ----------
-#     monitor_list : list
-#         List of monitor dictionaries
-        
-#     Returns
-#     -------
-#     script : str
-#         Python script code for initializing monitors in mp_sim_run
-#     """
-#     script = ""
-    
-#     if monitor_list is not None:
-#         script += "\n# Initialize monitors in the mp_sim_run object\n"
-#         for monitor_entry in monitor_list:
-#             # Each entry is a dict with one key (monitor name)
-#             monitor_name = list(monitor_entry.keys())[0]
-#             monitor_content = monitor_entry[monitor_name]
-            
-#             # monitor_content is a list where:
-#             # monitor_content[0] is the monitor data dictionary 
-#             # monitor_content[1] is the monitor object
-#             monitor_data = monitor_content[0]
-#             meep_vol_obj = monitor_content[1]
-            
-#             if monitor_data["type"] == "mp.Volume":
-#                 script += f"{monitor_name}_VolumeMonitor= mp_sim_run.VolumeMonitor({meep_vol_obj}),\n"
-#             # Add other monitor types here
-#             else:
-#                 raise ValueError(f"Monitor type {monitor_data['type']} not recognized.")
-        
-#     return script
-#^====================================================================================================================^#
-# def run_meepsat_sim(data):
-#     script = f"""
-# mpsat_sim.run_simulation(sim = sim,
-#                          mpsat_sim = mpsat_sim,
-#                          runtime = run_time,
-#                          get_mp4 = {str(data["output"]["animation_options"]["get_mp4"]).capitalize()},
-#                          image_every = {data["output"]["animation_options"]["image_every"]},
-#                          Nfps = {data["output"]["animation_options"]["Nfps"]},
-#                          savepath = savepath,
-#                          movie_name = '{data["output"]["animation_options"]["movie_name"]}',
-#                          requested_data = data_required,
-#                          save_data = False)
-# """
-#     return script
-
-# def run_meepsat_sim(data):
-#     script = f"""
-# mpsat_sim.run_simulation(sim = sim,
-#                          mpsat_sim = mpsat_sim,
-#                          runtime = run_time,
-#                          get_mp4 = {str(data["output"]["animation_options"]["get_mp4"]).capitalize()},
-#                          image_every = {data["output"]["animation_options"]["image_every"]},
-#                          Nfps = {data["output"]["animation_options"]["Nfps"]},
-#                          savepath = savepath,
-#                          movie_name = '{data["output"]["animation_options"]["movie_name"]}',
-#                          requested_data = data_required,
-#                          monitor_list = monitor_list if 'monitor_list' in locals() else None,
-#                          save_data = False)
-# """
-#     return script
 
 #! THIS IS WORKING MATE BUT WITHOUT THE MEMORY EFFICIENCY CODE FOR ANIMATION:
 def run_meepsat_sim(data):
@@ -1036,188 +787,6 @@ mpsat_sim.run_simulation(sim = sim,
 """
     return script
 
-# def run_meepsat_sim(data):
-#     # Extract the plotting params if they exist
-#     plotting_params = "None"
-#     if "plotting_params" in data["output"]["animation_options"]:
-#         plotting_params = json.dumps(data["output"]["animation_options"]["plotting_params"])
-    
-#     # Extract streaming option if it exists
-#     use_streaming = "None"
-#     if "use_streaming_mp4" in data["output"]["animation_options"]:
-#         use_streaming = str(data["output"]["animation_options"]["use_streaming_mp4"])
-    
-#     script = f"""
-# mp_sim_run.set_animation_params(anim_params= {{'image_every': {data["output"]["animation_options"]["image_every"]}, 
-#                                              'Nfps': {data["output"]["animation_options"]["Nfps"]}, 
-#                                              'anim_file_name': savepath + '{data["output"]["animation_options"]["movie_name"]}',
-#                                              'use_streaming_mp4': {use_streaming},
-#                                              'plotting_params': {plotting_params}}})
-
-# mpsat_sim.run_simulation(sim = sim,
-#                          mpsat_sim = mpsat_sim,
-#                          runtime = run_time,
-#                          get_mp4 = {str(data["output"]["animation_options"]["get_mp4"]).capitalize()},
-#                          image_every = {data["output"]["animation_options"]["image_every"]},
-#                          Nfps = {data["output"]["animation_options"]["Nfps"]},
-#                          savepath = savepath,
-#                          movie_name = '{data["output"]["animation_options"]["movie_name"]}',
-#                          requested_data = data_required,
-#                          monitor_list = monitor_list if 'monitor_list' in locals() else None,
-#                          save_data = False)
-# """
-#     return script
-
-# def run_meepsat_sim(data):
-#     # Extract the plotting params if they exist
-#     plotting_params = "None"
-#     if "plotting_params" in data["output"]["animation_options"]:
-#         plotting_params = json.dumps(data["output"]["animation_options"]["plotting_params"])
-    
-#     # Extract streaming option if it exists
-#     use_streaming = "None"
-#     if "use_streaming_mp4" in data["output"]["animation_options"]:
-#         use_streaming = str(data["output"]["animation_options"]["use_streaming_mp4"])
-    
-#     script = f"""
-# mp_sim_run.set_animation_params(anim_params= {{'image_every': {data["output"]["animation_options"]["image_every"]}, 
-#                                              'Nfps': {data["output"]["animation_options"]["Nfps"]}, 
-#                                              'anim_file_name': savepath + '{data["output"]["animation_options"]["movie_name"]}',
-#                                              'use_streaming_mp4': {use_streaming},
-#                                              'plotting_params': {plotting_params}}})
-
-# # Add flux monitor functions to data_required
-# if 'flux_monitor_list' in locals():
-#     # Add flux monitor functions to at_every list
-#     if 'at_every' not in data_required:
-#         data_required['at_every'] = []
-#     data_required['at_every'].extend(['incident_flux', 'reflection_flux', 'transmission_flux'])
-    
-#     # Add flux calculation at the end
-#     if 'at_end' not in data_required:
-#         data_required['at_end'] = []
-#     data_required['at_end'].append('calculate_transmission_reflection')
-    
-#     print("Added flux monitor functions to data_required")
-
-# mpsat_sim.run_simulation(sim = sim,
-#                          mpsat_sim = mpsat_sim,
-#                          runtime = run_time,
-#                          get_mp4 = {str(data["output"]["animation_options"]["get_mp4"]).capitalize()},
-#                          image_every = {data["output"]["animation_options"]["image_every"]},
-#                          flux_monitor_save_freq = {data["output"]["flux_monitor_save_freq"]},
-#                          Nfps = {data["output"]["animation_options"]["Nfps"]},
-#                          savepath = savepath,
-#                          movie_name = '{data["output"]["animation_options"]["movie_name"]}',
-#                          requested_data = data_required,
-#                          monitor_list = monitor_list if 'monitor_list' in locals() else None,
-#                          flux_monitor_list = flux_monitor_list if 'flux_monitor_list' in locals() else None,
-#                          save_data = False)
-# """
-#     return script
-
-# def run_meepsat_sim(data):
-#     """
-#     Create code for running the MEEPSAT simulation
-#     """
-#     script = ""
-    
-#     # Extract values once to use in both simulations
-#     flux_monitor_save_freq = data["output"].get("flux_monitor_save_freq", 5)
-    
-#     # Handle reference simulation first if requested
-#     if data.get("run_reference_sim", False):
-#         script += f"""
-# #~ Running Reference Simulation (no geometries)
-# print("===== RUNNING REFERENCE SIMULATION (NO GEOMETRIES) =====")
-
-# # Store original geometries
-# original_meep_geometries = mpsat_sim.meep_geometry.copy()
-# original_sim_name = mpsat_sim.sim_name
-
-# # Clear geometries for reference run
-# mpsat_sim.meep_geometry = []
-# mpsat_sim.sim_name = f"{{original_sim_name}}_reference"
-
-# # Create simulation with only monitors and sources
-# ref_sim = mpsat_sim.meep_sim_obj(sources=source_list, 
-#                                  geometry=[],  # Empty geometry list
-#                                  boundary_layers=[pml])
-
-# # Set reference flag in data_required
-# data_required_ref = {{}}
-# if 'at_every' in data_required:
-#     data_required_ref['at_every'] = ['incident_flux']
-# else:
-#     data_required_ref['at_every'] = ['incident_flux']
-
-# # Add flux calculation at the end
-# if 'at_end' not in data_required_ref:
-#     data_required_ref['at_end'] = []
-# data_required_ref['at_end'].append('calculate_transmission_reflection')
-
-# print("Running reference simulation...")
-
-# # Run the reference simulation with the same runtime as the main simulation
-# mpsat_sim.run_simulation(sim=ref_sim,
-#                          mpsat_sim=mpsat_sim,
-#                          runtime=run_time,  # Use the same runtime value
-#                          get_mp4=False,  # No animation for reference run
-#                          flux_monitor_save_freq={flux_monitor_save_freq},
-#                          savepath=savepath + "reference/",
-#                          requested_data=data_required_ref,
-#                          flux_monitor_list=flux_monitor_list,
-#                          is_reference=True)
-
-# print("Reference simulation completed. Now running the main simulation.")
-
-# # Restore original geometries and simulation name
-# mpsat_sim.meep_geometry = original_meep_geometries
-# mpsat_sim.sim_name = original_sim_name
-
-# # Create the main simulation with restored geometries
-# sim = mpsat_sim.meep_sim_obj(sources=source_list,
-#                              geometry=mpsat_sim.meep_geometry,
-#                              boundary_layers=[pml])
-# """
-
-#     # Add normal simulation run if not a reference-only run
-#     if not data.get("reference_only", False):
-#         # Get animation options
-#         get_mp4 = str(data["output"]["animation_options"]["get_mp4"]).capitalize()
-#         image_every = data["output"]["animation_options"]["image_every"]
-#         nfps = data["output"]["animation_options"]["Nfps"]
-#         movie_name = data["output"]["animation_options"].get("movie_name", "simulation")
-        
-#         script += """
-# # Add flux monitor functions to at_every list
-# if 'at_every' not in data_required:
-#     data_required['at_every'] = []
-# data_required['at_every'].extend(['incident_flux', 'reflection_flux', 'transmission_flux'])
-
-# # Add flux calculation at the end
-# if 'at_end' not in data_required:
-#     data_required['at_end'] = []
-# data_required['at_end'].append('calculate_transmission_reflection')
-
-# print("Added flux monitor functions to data_required")
-
-# mpsat_sim.run_simulation(sim=sim,
-#                          mpsat_sim=mpsat_sim,
-#                          runtime=run_time,  # Pass runtime directly
-# """
-#         # Add each parameter individually to avoid f-string issues
-#         script += f"""                         get_mp4={get_mp4},
-#                          image_every={image_every},
-#                          flux_monitor_save_freq={flux_monitor_save_freq},
-#                          Nfps={nfps},
-#                          savepath=savepath,
-#                          movie_name='{movie_name}',
-#                          requested_data=data_required,
-#                          flux_monitor_list=flux_monitor_list)
-# """
-    
-#     return script
 
 #^====================================================================================================================^#
 ### JSON TO SCRIPT CONVERSION ###
@@ -1291,18 +860,7 @@ def at_every_command(at_every_list, timestep):
     
     return command.rstrip(",\n")  # Remove trailing comma and newline if present
 
-# def at_end_command(at_end_list):
-#     if not at_end_list:  # Handle empty list case
-#         return ""
-        
-#     command = ""
-#     for data in at_end_list:
-#         if data == "save_animation":
-#             command += f"mp.at_end(mp_sim_run.save_animation),\n"
-#         else:
-#             command += f"mp.at_end(mp.{data}),\n"
-    
-#     return command.rstrip(",\n")  # Remove trailing comma and newline if present
+
 
 def at_end_command(at_end_list):
     if not at_end_list:  # Handle empty list case
@@ -1357,14 +915,6 @@ def at_end_command_for_volume_monitors(at_end_list, monitor_type=None):
         else:
             raise ValueError(f"Monitor type {monitor_type} not recognized.")
         
-    # for data in at_end_list:
-    #     if data == "save_all_monitor_data":
-    #         command += f"mp.at_end(mp_sim_run.save_all_monitor_data),\n"
-    #     elif data == "Ez2_dB":
-    #         command += f"mp.at_end(mp_sim_run.{data}_VolumeMonitor),\n"
-    #     else:
-    #         command += f"mp.at_end({data}),\n"
-
     return command.rstrip(",\n")  # Remove trailing comma and newline if present
 
 def data_required_inside_indiv_monitors(monitor_list):
@@ -1429,76 +979,3 @@ def sims_data_requested(data_required, run_time, monitor_list):
 )"""
     # print(main_script)
     return main_script
-
-# Update the sims_data_requested function to include flux monitor handling
-
-# def sims_data_requested(data_required, run_time, monitor_list):
-#     # Prepare the content for the run function separately
-#     run_args = data_required_script_inside_sim_run(data_required)
-    
-#     # Handle standard volume monitors
-#     if monitor_list is not None:
-#         run_args += ",\n"
-#         monitor_run_args = data_required_inside_indiv_monitors(monitor_list)
-#         run_args += monitor_run_args
-    
-#     # Check for flux calculation at the end
-#     if 'at_end' in data_required and 'calculate_transmission_reflection' in data_required['at_end']:
-#         # Use the special flux monitor handler for at_end
-#         flux_commands = at_end_command_for_flux_monitors(['calculate_transmission_reflection'])
-#         if flux_commands:
-#             run_args += f",\n{flux_commands}"
-
-#     # If run_args is not empty, add a comma between commands
-#     if run_args:
-#         run_args += ",\n"
-#     run_args += run_time["command"]
-
-#     # Apply indentation to each line of run_args
-#     indented_args = "\n".join(f"    {line}" for line in run_args.split("\n"))
-    
-#     main_script = f"""self.sim.run(
-# {indented_args}
-# )"""
-#     return main_script
-
-# def sims_data_requested(data_required, run_time, monitor_list, is_reference=False):
-#     # Prepare the content for the run function separately
-#     run_args = data_required_script_inside_sim_run(data_required)
-    
-#     # Handle standard volume monitors (only if not in reference mode)
-#     if monitor_list is not None and not is_reference:
-#         run_args += ",\n"
-#         monitor_run_args = data_required_inside_indiv_monitors(monitor_list)
-#         run_args += monitor_run_args
-    
-#     # Add special handling for reference simulations
-#     if is_reference:
-#         # Only add essential flux calculations for reference run
-#         flux_commands = at_end_command_for_flux_monitors(['calculate_transmission_reflection'])
-#         if flux_commands:
-#             run_args += f",\n{flux_commands}"
-#     else:
-#         # For main simulation, add standard flux calculations
-#         if 'at_end' in data_required and 'calculate_transmission_reflection' in data_required['at_end']:
-#             flux_commands = at_end_command_for_flux_monitors(['calculate_transmission_reflection'])
-#             if flux_commands:
-#                 run_args += f",\n{flux_commands}"
-
-#     # If run_args is not empty, add a comma between commands
-#     if run_args:
-#         run_args += ",\n"
-#     run_args += run_time["command"]
-
-#     # Apply indentation to each line of run_args
-#     indented_args = "\n".join(f"    {line}" for line in run_args.split("\n"))
-    
-#     main_script = f"""self.sim.run(
-# {indented_args}
-# )"""
-#     return main_script
-
-# Example usage
-# if __name__ == "__main__":
-#     json_file = "example_scripts/example.json"
-#     json_to_pyscript(json_file)

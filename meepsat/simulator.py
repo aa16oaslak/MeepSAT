@@ -763,41 +763,6 @@ class sim_init():
         print("MEEP simulation object created successfully! Here is the simulation object: ", self.sim)
         return self.sim
 
-
-    # def run_simulation(self,
-    #                    sim = None, 
-    #                    mpsat_sim = None,
-    #                    json_file_path: str = None,                       
-    #                    runtime = None,
-    #                    get_mp4: bool = False,
-    #                    dpi: int = 150,
-    #                    image_every: int = 5,
-    #                    Nfps: int = 24,
-    #                    savepath: str = None,
-    #                    movie_name: str = 'movie',
-    #                    requested_data: list = None,
-    #                    save_data: bool = False,
-    #                    verbose: bool = False,
-    #                    kwargs: dict= None):
-
-    # def run_simulation(self,
-    #                 sim = None, 
-    #                 mpsat_sim = None,
-    #                 json_file_path: str = None,                       
-    #                 runtime = None,
-    #                 get_mp4: bool = False,
-    #                 dpi: int = 150,
-    #                 image_every: int = 5,
-    #                 Nfps: int = 24,
-    #                 savepath: str = None,
-    #                 movie_name: str = 'movie',
-    #                 requested_data: list = None,
-    #                 monitor_list: list = None,  # Add this parameter
-    #                 save_data: bool = False,
-    #                 verbose: bool = False,
-    #                 kwargs: dict= None):
-
-
     def run_refence_simulation(self,
                     sim = None, 
                     mpsat_sim = None,
