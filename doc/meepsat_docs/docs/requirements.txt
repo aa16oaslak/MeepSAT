@@ -1,3 +1,1 @@
 mkdocs>=1.4.0
-readthedocs-theme>=1.1.0
-pymdown-extensions>=10.0
