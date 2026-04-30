@@ -21,3 +21,7 @@ recipe_for_MEEP_installation/
 # Exception: track png files in images folder
 !docs/
 !docs/images/**/*.png
+
+# Exception: track files in docs/output_files folder
+!docs/output_files/
+!docs/output_files/**
