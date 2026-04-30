@@ -17,3 +17,7 @@ recipe_for_MEEP_installation/
 # Exception: track requirements.txt files
 !requirements.txt
 !*/requirements.txt
+
+# Exception: track png files in images folder
+!docs/
+!docs/images/**/*.png
