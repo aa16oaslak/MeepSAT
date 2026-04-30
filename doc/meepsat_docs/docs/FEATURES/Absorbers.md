@@ -341,13 +341,13 @@ plt.close(fig)
 ```
 Here's the resulting epsilon map
 
-![Epsilon Map with Linear Absorbers](/Jupyter_Notebooks/FEATURES/Absorbers/output_files/epsilon_map_linear_absorbers.png)
+![Epsilon Map with Linear Absorbers](/Jupyter_Notebooks/FEATURES/Absorbers/epsilon_map_linear_absorbers.png)
 
 Now if we change `taper_type = Pyramidal` or `taper_type = Exponential`
 
-![Epsilon Map with Pyramidal Absorbers](/Jupyter_Notebooks/FEATURES/Absorbers/output_files/epsilon_map_pyramidal_absorbers.png)
+![Epsilon Map with Pyramidal Absorbers](/Jupyter_Notebooks/FEATURES/Absorbers/epsilon_map_pyramidal_absorbers.png)
 
-![Epsilon Map with Exponential Absorbers](/Jupyter_Notebooks/FEATURES/Absorbers/output_files/epsilon_map_exponential_absorbers.png)
+![Epsilon Map with Exponential Absorbers](/Jupyter_Notebooks/FEATURES/Absorbers/epsilon_map_exponential_absorbers.png)
 
 Now if you want to construct a single absorber (for debugging OR simulations with periodic conditions), you can just remove the `start_point` and `end_point` parameters
 
