@@ -7,7 +7,7 @@ build:
 
 python:
   install:
-    - requirements: doc/requirements.txt
+    - requirements: doc/meepsat_docs/docs/requirements.txt
 
 mkdocs:
   configuration: doc/meepsat_docs/mkdocs.yml
