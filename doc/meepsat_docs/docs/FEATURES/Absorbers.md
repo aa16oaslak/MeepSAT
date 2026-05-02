@@ -185,7 +185,7 @@ Key Parameters:
 
 + **`savepath` [`str`, optional]** — Directory for saving generated plots. Default: current directory (`"./"`)`.
 
-### Unit Cell and Multiple Absorber
+### Absorbers between two points
 
 We will be using the same dimensions of the absorbers mentioned in [Singh et al.(2026)](https://arxiv.org/pdf/2511.05309). 
 
@@ -349,5 +349,15 @@ Now if we change `taper_type = Pyramidal` or `taper_type = Exponential`
 
 ![Epsilon Map with Exponential Absorbers](../Jupyter_Notebooks/FEATURES/Absorbers/epsilon_map_exponential_absorbers.png)
 
-Now if you want to construct a single absorber (for debugging OR simulations with periodic conditions), you can just remove the `start_point` and `end_point` parameters
+### Unit cell Absorber
 
+Now if you want to construct a single absorber (for debugging OR unit cell simulations with periodic conditions), you can just remove the `start_point` and `end_point` parameters and play with the `center_x_mm`, `center_y_mm`, `orientation` and `angle_axis` parameters. For e.g., below we have produced the three different types of absorbers at different locations and different orientations:
+
+- Linear Absorber at 45 degree orientation at (0,0)
+- Pyramidal Absorber at 120 degree orientation near the (10,-10)
+- Exponential Absorber at 120 degree orientation near the (-10,10)
+
+![Epsilon Map with all unit cell Absorbers](../Jupyter_Notebooks/FEATURES/Absorbers/epsilon_map_all_absorbers_orientations.png)
+
+
+The code used in this page can be found at [Absorbers.ipynb](https://github.com/aa16oaslak/MeepSAT/blob/main/doc/meepsat_docs/docs/Jupyter_Notebooks/FEATURES/Absorbers.ipynb).
