@@ -18,3 +18,8 @@ To preview your documentation with live reload enabled, go to the docs directory
 ```bash
 python -m mkdocs serve --livereload
 ```
+
+### How the Tutorial docs is defined?
+
+The `.md` files are used for the main content that will be displayed in readthedocs website. 
+The executible Tutorials will be placed in the `root/examples` folder where the USER can directly just run it in their lcoal environment. 

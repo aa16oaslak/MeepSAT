@@ -361,3 +361,7 @@ Now if you want to construct a single absorber (for debugging OR unit cell simul
 
 
 The code used in this page can be found at [Absorbers.ipynb](https://github.com/aa16oaslak/MeepSAT/blob/main/doc/meepsat_docs/docs/Jupyter_Notebooks/FEATURES/Absorbers.ipynb).
+
+
+### Tutorial/Measuring the R and T spectra
+

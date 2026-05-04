@@ -2511,6 +2511,7 @@ class Absorbers:
         plt.xlabel('Normalized Height (l/h)')
         plt.ylabel('Alpha (Filling factor)')
         plt.grid()
+        
         plt.legend()
         plt.savefig(self.savepath + 'alpha_values_linear_absorber.png')
         plt.close()
