@@ -9,7 +9,7 @@
           "y": 54,
           "z": 0
         },
-        "resolution": 3,
+        "resolution": 8,
         "smallest_freq": 0.25
       } 
     },
@@ -78,7 +78,7 @@
           "aperture1": {
             "type": "square",
             "diameter": 50,
-            "pos_x": 20,
+            "pos_x": -60,
             "thickness": 1,
             "material": "mp.perfect_electric_conductor",
             "conductivity": "mp.inf",

@@ -157,7 +157,6 @@ sim.plot_and_save_epsilon(
 
 Here's the resulting epsilon map
 
-
 ![Epsilon map visualization](../../../images/Tutorials/Single_lens_system/Single_lens_system.png)
 
 
