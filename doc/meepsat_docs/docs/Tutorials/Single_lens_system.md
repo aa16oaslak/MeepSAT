@@ -1,5 +1,9 @@
 # Simple Single Lens (with ARC)
 
+[TOC]
+
+The code used in this tutorial can be found at [Single_lens_system.ipynb](https://github.com/aa16oaslak/MeepSAT/blob/main/examples/simple_single_lens_ARC.ipynb)
+
 `NOTE`: First, make sure to connect to the correctly installed version of MeepSAT's jupyter kernel 
 
 In this tutorial, we will simulate a 2D Gaussian beam propagating through a plano-convex lens with anti-reflective (AR) coatings. By the end of this tutorial, you will understand how to:
@@ -157,6 +161,102 @@ sim.plot_and_save_epsilon(
 
 Here's the resulting epsilon map
 
-![Epsilon map visualization](../../../images/Tutorials/Single_lens_system/Single_lens_system.png)
+![Epsilon map visualization](./images/Single_lens_system/Single_lens_system.png)
 
 
+Now let's set the different run time parameters:
+
+- Animation
+    `stepfunctions.set_animation_params(...)`
+    - Configures how the simulation will be visualized as an animation
+        - `image_every`: Frequency of field snapshots (e.g., every N timesteps)
+        - `Nfps`: Frames per second for the output video
+        - `anim_file_name`: Output path and filename for the MP4 movie
+
+- Field Parameters
+    `stepfunctions.set_field_params(...)`
+    - Defines spatial and storage parameters for electromagnetic field data
+        - `size_x`, `size_y`: Physical dimensions of the simulation domain
+        - `savepath`: Directory where field data will be stored
+        - `downsampling_factor_x/y`: Reduces data resolution for storage (e.g., keep every Nth point)
+
+- Runtime Parameters
+    `runtime_params = sim.calculate_runtime_parameters(...)`
+    - Computes temporal simulation parameters for field extraction based on the source frequency
+        - `source_freq`: Operating frequency (extracted from JSON with a typo "frequecy")
+        - `total_time`: Total simulation duration
+        - `animation_timestep`: Time interval between field captures
+        - `points_per_period`: Temporal resolution (10 points per wavelength period)
+        - `extraction_offset`: Buffer time before field extraction begins
+
+Now let's run the simulation by setting the above parameters
+
+```python
+# Set the stepfunctions parameters
+# Animation Parameters
+stepfunctions.set_animation_params(anim_params= {'image_every': data["output"]["animation_options"]["image_every"], 
+                                              'Nfps': data["output"]["animation_options"]["Nfps"], 
+                                              'anim_file_name': savepath + "/"+ data["output"]["animation_options"]["movie_name"] + ".mp4"})
+# Field Parameters
+stepfunctions.set_field_params(field_params= {'size_x': size_x,
+                                              'size_y': size_y,
+                                              'savepath': savepath,
+                                              'downsampling_factor_x': data["output"]["animation_options"]["downsample_x"],
+                                              'downsampling_factor_y': data["output"]["animation_options"]["downsample_y"]})
+
+# Runtime parameters
+runtime_params = sim.calculate_runtime_parameters(
+    source_freq=float(data["sources"]["source1"]["frequecy"]),
+    total_time= 400,
+    animation_timestep = data["output"]["animation_options"]["image_every"],
+    points_per_period=20,
+    extraction_offset=10
+)
+
+simulation.run(mp.at_every(runtime_params["animation_timestep"], stepfunctions.Ez2_dB),
+               mp.after_time(runtime_params["t0"], mp.at_every(runtime_params["dt"], stepfunctions.accumulate_efield_and_hfield)),
+               mp.at_end(stepfunctions.save_animation),
+               mp.at_end(stepfunctions.save_accumulated_fields),
+               mp.at_end(stepfunctions.extract_xyzw),
+               until = runtime_params["total_time"])
+
+print("Simulation completed.")                                                 
+
+# #~ ---------------------------------------------
+
+# Save the final edited JSON data
+with open(data["output"]["savepath"]["path"] + data["simulation"]["name"] + "_simulation_data.json", "w") as f:
+    json.dump(data, f, indent=2)
+print(f"Simulation parameters saved to: {data['output']['savepath']['path']}{data['simulation']['name']}_simulation_data.json")
+```
+
+# Post Simulation Analysis
+
+Now we will be extracting the following information from the post-processed data:
+
+- Verifying the aperture profile and the corresponding far field beams with industry standard softwares such as CST and GRASP.
+- Calculating the poynting vector $\textbf{S}$ from the $\textbf{E}$ and $\textbf{H}$ fields.
+- Analysing the Scalar Product between the Poynting Vector components of time-forward and time-reverse simulations.
+
+
+The Poynting vector components in TE mode are:
+
+- $S_x = -E_z \cdot H_y^*$
+
+- $S_y = E_z \cdot H_x^*$
+
+At 150 GHz, we get the following E-field and S-field maps:
+
+![E-field map visualization](./images/Single_lens_system/efield_150ghz.png)
+
+![S-field map visualization](./images/Single_lens_system/sfield_150ghz.png)
+
+## Far Field Beam comparision with CST and GRASP
+
+In the current version of the MeepSAT, we extract the Far Field Beam profile using the [Fraunhofer diffraction](https://en.wikipedia.org/wiki/Fraunhofer_diffraction_equation) formula, where the far field is basically the fourier transform of the fields at the aperture. In the near future, we will also have the capabilties in MeepSAT to extract the far field beam using the spherical decomposition approach. Here are the efield amplitude profiles compared with GRASP Method-of-Moments and CST Finite Integration Time methods
+
+![E-field map visualization](./images/Single_lens_system/efield_comparision.png)
+
+![S-field map visualization](./images/Single_lens_system/farfield_comparision.png)
+
+After confirming that MeepSAT agrees well with pre-established industry standard softwares such as CST and GRASP, we move forward in testing it for the existing 2-lens system design for SPIDER 2.
