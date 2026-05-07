@@ -21,3 +21,7 @@ recipe_for_MEEP_installation/
 # Exception: track png files in images folder
 !docs/
 !docs/images/**/*.png
+
+# Add the CST and GRASP data for the simple single lens ARC example 
+!examples/auxilary_data/simple_single_lens_ARC/CST_data/**
+!examples/auxilary_data/simple_single_lens_ARC/GRASP_data/**
