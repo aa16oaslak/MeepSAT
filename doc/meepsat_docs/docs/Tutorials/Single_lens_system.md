@@ -2,7 +2,7 @@
 
 [TOC]
 
-The code used in this tutorial can be found at [Single_lens_system.ipynb](https://github.com/aa16oaslak/MeepSAT/blob/main/examples/simple_single_lens_ARC.ipynb)
+The code used in this tutorial can be found at [Single_lens_system.ipynb](https://github.com/aa16oaslak/MeepSAT/blob/main/examples/01_simple_single_lens_ARC.ipynb)
 
 `NOTE`: First, make sure to connect to the correctly installed version of MeepSAT's jupyter kernel 
 

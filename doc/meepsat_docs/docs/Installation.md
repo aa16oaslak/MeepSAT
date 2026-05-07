@@ -350,7 +350,15 @@ This creates a writable directory structure instead of a read-only SIF file. You
 apptainer shell --writable meepsat_sandbox/
 ```
 
+`NOTE`: Generally the base code of MeepSAT is located at `meepsat_sandbox/meep/venv/lib/python3.12/site-packages/meepsat`
+
+You can use following command to basically copy your updated code: 
+```bash
+sudo cp -r meepsat $PATH_TO_MEEPSAT_SANDBOX/meepsat_sandbox/meep/venv/lib/python3.12/site-packages/meepsat
+```
+
 Inside the sandbox, you can:
+
 - Install new packages: `pip install your_package`
 - Modify configuration files
 - Test changes interactively
