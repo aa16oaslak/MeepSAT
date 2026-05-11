@@ -1,0 +1,154 @@
+# Importing various Python libraries and MeepSAT modules
+import sys
+import os
+import site
+from pathlib import Path
+import meep as mp
+import numpy as np
+import h5py
+import matplotlib.pyplot as plt
+import time
+import json
+
+# Importing the MEEPSAT librarires
+import meepsat.simulator as sim
+import meepsat.meep_geometry as comp_meep
+import meepsat.permittivity_components as comp_eps
+import meepsat.stepfunctions as stepfunctions
+import meepsat.json_to_script as json_to_script
+import meepsat.field_analysis as mpsat_analysis
+import meepsat.helpers as mpsat_helpers
+
+# Importing the parameters defined in the bash file
+json_file_path, source_freq, res, savepath_dir, runtime, beam_waist = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], float(sys.argv[5]), float(sys.argv[6])
+
+# JSON file path representing mainly the different optical components parameters
+data = mpsat_helpers.read_json(json_file_path)
+
+# Savepath: For storing the output generated during the simulation
+savepath = savepath_dir
+data["output"]["savepath"]["path"] = savepath # Updating the json file with the savepath used in the simulation
+os.makedirs(savepath, exist_ok=True)
+
+
+# Initialising MEEPSAT Simulation
+cell_X, cell_Y, cell_Z = data["simulation"]['primary_params']['cell_size']['x'], data["simulation"]['primary_params']['cell_size']['y'], data["simulation"]['primary_params']['cell_size']['z'] # Cell Size without considering the PML thickness and its factor
+
+
+# Initialize the simulation with the different parameters
+mpsat_sim = sim.sim_init(sim_name= str(data["simulation"]["name"]),
+                        cell_size= [cell_X, cell_Y, cell_Z], # [sx, sy, sz] in mm
+                        smallest_freq= data["simulation"]['primary_params']['smallest_freq'], 
+                        resolution= data["simulation"]['primary_params']['resolution'],
+                        boundary_layer_type= data['boundary_layers']['boundary']['type'],
+                        boundary_layer_size= data['boundary_layers']['boundary']['size'],
+                        factor_dpml= data['boundary_layers']['boundary']['factor_dpml'])
+
+
+# Checking resolution and PML thickness 
+# This function will automatically check all the length scales and wavelength scales
+data, mpsat_sim = sim.check_resolution_and_pml(
+    data=data, 
+    mpsat_sim=mpsat_sim,
+    smallest_freq=data["simulation"]['primary_params']['smallest_freq'],
+    highest_n=data["lenses"]["lens1"]["n_refr"]
+)
+
+# Print the simulation parameters
+print("\nMEEPSAT SIMULATION PARAMETERS:")
+mpsat_sim.print_simulation_parameters()
+
+source_list = []
+exec(json_to_script.source_script(data))
+
+
+x_left_boundary = mp.PML(thickness=mpsat_sim.dpml*mpsat_sim.factor_dpml, direction=mp.X, side=mp.Low)
+x_right_boundary = mp.PML(thickness=mpsat_sim.dpml*mpsat_sim.factor_dpml, direction=mp.X, side=mp.High)
+y_down_boundary = mp.PML(thickness=mpsat_sim.dpml*mpsat_sim.factor_dpml, direction=mp.Y, side=mp.Low)
+y_up_boundary = mp.PML(thickness=mpsat_sim.dpml*mpsat_sim.factor_dpml, direction=mp.Y, side=mp.High)
+
+custom_boundary_layers = [x_left_boundary, x_right_boundary, y_down_boundary, y_up_boundary]
+
+size_x, size_y, size_z = mpsat_sim.cell_size[0], mpsat_sim.cell_size[1], mpsat_sim.cell_size[2]
+res = int(mpsat_sim.resolution)  # Ensure resolution is an integer
+# Create the epsilon map: total size of the simulation cell in all the axis multiplied by the resolution + 1
+epsilon_map = np.ones((int((size_x)*res+1), 
+                       int((size_y)*res+1)), dtype = 'float32')
+
+# Adding lens (if given)
+exec(json_to_script.add_lens(data))
+
+# Adding aperture (if given)
+exec(json_to_script.add_aperture(data))
+
+symmetries = [mp.Mirror(mp.Y, phase=+1)] 
+
+simulation = mp.Simulation(
+    cell_size=mpsat_sim.cell,
+    sources=source_list,
+    resolution=mpsat_sim.resolution,
+    boundary_layers=custom_boundary_layers,
+    geometry=mpsat_sim.meep_geometry,
+    epsilon_input_file = data["output"]["savepath"]["path"] + data["output"]["epsilon_h5_file"]["filename"] +"_epsilon_map" + ".h5",
+    symmetries = symmetries,
+    force_complex_fields= True)
+
+simulation.use_output_directory(savepath)
+
+
+sim.plot_and_save_epsilon(
+    simulation=simulation,
+    savepath=savepath,
+    filename_prefix="geometry_plot",
+    epsilon_data_name="epsilon",
+    size_x=size_x,
+    size_y=size_y,
+    vmin=0.5,
+    vmax=3,
+    cmap='viridis',
+    figsize=(8, 4),
+    dpi=300,
+    show_plot= True,
+    save_h5= False
+)
+
+
+# Set the stepfunctions parameters
+# Animation Parameters
+stepfunctions.set_animation_params(anim_params= {'image_every': data["output"]["animation_options"]["image_every"], 
+                                              'Nfps': data["output"]["animation_options"]["Nfps"], 
+                                              'anim_file_name': savepath + "/"+ data["output"]["animation_options"]["movie_name"] + ".mp4"})
+# Field Parameters
+stepfunctions.set_field_params(field_params= {'size_x': size_x,
+                                              'size_y': size_y,
+                                              'savepath': savepath,
+                                              'downsampling_factor_x': data["output"]["animation_options"]["downsample_x"],
+                                              'downsampling_factor_y': data["output"]["animation_options"]["downsample_y"]})
+
+# Runtime parameters
+runtime_params = sim.calculate_runtime_parameters(
+    source_freq=float(data["sources"]["source1"]["frequecy"]),
+    total_time= runtime,
+    animation_timestep = data["output"]["animation_options"]["image_every"],
+    points_per_period=10,
+    extraction_offset=10
+)
+
+
+simulation.run(mp.at_every(runtime_params["animation_timestep"], stepfunctions.Ez2_dB),
+               mp.after_time(runtime_params["t0"], mp.at_every(runtime_params["dt"], stepfunctions.accumulate_efield_and_hfield)),
+               mp.at_end(stepfunctions.save_animation),
+               mp.at_end(stepfunctions.save_accumulated_fields),
+               mp.at_end(stepfunctions.extract_xyzw),
+               until = runtime_params["total_time"])
+
+print("Simulation completed.")                                                 
+
+# #~ ---------------------------------------------
+
+# Save the final edited JSON data
+with open(data["output"]["savepath"]["path"] + data["simulation"]["name"] + "_simulation_data.json", "w") as f:
+    json.dump(data, f, indent=2)
+print(f"Simulation parameters saved to: {data['output']['savepath']['path']}{data['simulation']['name']}_simulation_data.json")
+
+

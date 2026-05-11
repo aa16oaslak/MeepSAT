@@ -1005,6 +1005,107 @@ class AsphericLens(object):
                 h.flush()  # Ensure data is written to disk
             
             print(f"HDF5 file written to {os.path.abspath(full_path)}")
+    
+
+
+    # def write_h5file(self, parallel=False, filename='epsilon_map'):
+    #     '''
+    #     Writes the file that will then be 
+    #     read within the MEEP simulation
+    #     '''
+    #     import os
+    #     import time
+        
+    #     # Store the full path - use absolute path
+    #     self.mapname = filename
+    #     full_path = os.path.abspath(filename + '.h5')
+        
+    #     if parallel:
+    #         from mpi4py import MPI
+    #         comm = MPI.COMM_WORLD
+    #         rank = comm.Get_rank()
+            
+    #         # Ensure directory exists (all ranks)
+    #         file_dir = os.path.dirname(full_path)
+    #         os.makedirs(file_dir, exist_ok=True)
+    #         comm.barrier()
+            
+    #         # Only rank 0 writes the file
+    #         if rank == 0:
+    #             if os.path.exists(full_path):
+    #                 try:
+    #                     os.remove(full_path)
+    #                     time.sleep(1)
+    #                 except OSError:
+    #                     pass
+                
+    #             max_retries = 3
+    #             for attempt in range(max_retries):
+    #                 try:
+    #                     with h5py.File(full_path, 'w') as h:
+    #                         size_x = len(self.permittivity_map[:, 0])
+    #                         size_y = len(self.permittivity_map[0, :])
+    #                         dset = h.create_dataset('eps', (size_x, size_y), dtype='float32')
+    #                         dset[:, :] = self.permittivity_map.astype('float32')
+    #                         h.flush()
+                        
+    #                     # Verify file was written
+    #                     if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
+    #                         print(f"Rank 0: HDF5 file successfully written to {full_path}")
+    #                         print(f"File size: {os.path.getsize(full_path) / 1e6:.2f} MB")
+    #                     else:
+    #                         raise IOError(f"File verification failed at {full_path}")
+    #                     break
+    #                 except (BlockingIOError, OSError, RuntimeError) as e:
+    #                     if attempt < max_retries - 1:
+    #                         print(f"Rank 0: Attempt {attempt + 1} failed: {str(e)}")
+    #                         time.sleep(2 ** (attempt + 1))
+    #                     else:
+    #                         raise
+            
+    #         comm.barrier()
+    #         time.sleep(1)
+    #         comm.barrier()
+            
+    #         # Verify file exists on all ranks
+    #         if not os.path.exists(full_path):
+    #             raise FileNotFoundError(f"HDF5 file not found at {full_path}")
+
+    #     else:
+    #         # Serial mode
+    #         file_dir = os.path.dirname(full_path)
+    #         os.makedirs(file_dir, exist_ok=True)
+            
+    #         if os.path.exists(full_path):
+    #             try:
+    #                 os.remove(full_path)
+    #                 time.sleep(1)
+    #             except OSError:
+    #                 pass
+            
+    #         max_retries = 3
+    #         for attempt in range(max_retries):
+    #             try:
+    #                 with h5py.File(full_path, 'w') as h:
+    #                     size_x = len(self.permittivity_map[:, 0])
+    #                     size_y = len(self.permittivity_map[0, :])
+    #                     dset = h.create_dataset('eps', (size_x, size_y), dtype='float32', compression='gzip')
+    #                     dset[:, :] = self.permittivity_map
+    #                     h.flush()
+                    
+    #                 # Verify file
+    #                 if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
+    #                     print(f"HDF5 file successfully written to {full_path}")
+    #                     print(f"File size: {os.path.getsize(full_path) / 1e6:.2f} MB")
+    #                 else:
+    #                     raise IOError(f"File verification failed at {full_path}")
+    #                 break
+    #             except (BlockingIOError, OSError, RuntimeError) as e:
+    #                 if attempt < max_retries - 1:
+    #                     print(f"Attempt {attempt + 1} failed: {str(e)}")
+    #                     time.sleep(2 ** (attempt + 1))
+    #                 else:
+    #                     raise
 
 
     def write_lens_nARC(self, comp, eps_map, res, 

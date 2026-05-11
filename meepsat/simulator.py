@@ -76,7 +76,8 @@ def calculate_runtime_parameters(source_freq, total_time, animation_timestep, po
 def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_name, 
                           size_x, size_y, vmin=0.5, vmax=3, cmap='viridis', show_plot= False,
                           figsize=(8, 4), dpi=300, return_epsilon=False, focalplane_x=None,
-                          plot_pml=True, pml_thickness=None, pml_color='red', pml_alpha=0.2):
+                          plot_pml=True, pml_thickness=None, pml_color='red', pml_alpha=0.2,
+                          save_h5= True):
     """
     Plot and save the epsilon (permittivity) map from a MEEP simulation.
     
@@ -116,6 +117,8 @@ def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_na
         X-coordinate of focal plane to mark (default: None)
     return_epsilon : bool, optional
         Whether to return the epsilon array (default: False)
+    save_h5 : bool, optional
+        Whether to save the epsilon data in an HDF5 file (default: True)
     
     Returns:
     --------
@@ -176,13 +179,14 @@ def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_na
     else:
         plt.close()
     
-    # Save the epsilon map to an HDF5 file
-    h5_filename = os.path.join(savepath, f"{filename_prefix}.h5")
-    with h5py.File(h5_filename, "w") as h5file:
-        h5file.create_dataset(epsilon_data_name, data=epsilon)
-    
-    print(f"Epsilon plot saved to: {os.path.join(savepath, filename_prefix)}.png")
-    print(f"Epsilon data saved to: {h5_filename}")
+    if save_h5:
+        # Save the epsilon map to an HDF5 file
+        h5_filename = os.path.join(savepath, f"{filename_prefix}.h5")
+        with h5py.File(h5_filename, "w") as h5file:
+            h5file.create_dataset(epsilon_data_name, data=epsilon)
+        
+        print(f"Epsilon plot saved to: {os.path.join(savepath, filename_prefix)}.png")
+        print(f"Epsilon data saved to: {h5_filename}")
     
     if return_epsilon:
         return epsilon
