@@ -2443,6 +2443,67 @@ class Absorbers:
         else:
             return self.place_absorbers_between(self.start_point, self.end_point)
 
+    # def place_absorbers_between(self, start_point, end_point):
+    #     print("Placing absorbers between points:", start_point, "and", end_point)
+
+    #     # Calculate the direction vector
+    #     direction = np.array(end_point) - np.array(start_point)
+    #     direction_normalized = direction / np.linalg.norm(direction)
+    #     distance = np.linalg.norm(direction)
+
+    #     # Adjust start/end points to account for absorber width
+    #     start_point = np.array(start_point) + (self.p / 2) * direction_normalized
+    #     end_point = np.array(end_point) - (self.p / 2) * direction_normalized
+    #     distance = np.linalg.norm(end_point - start_point)
+
+    #     # Calculate number of absorbers with overlap factor to eliminate gaps
+    #     # Use slightly smaller spacing to ensure overlap
+    #     overlap_factor = self.overall_factor  # 95% of p spacing = 5% overlap
+    #     num_absorbers = int(np.ceil(distance / (self.p * overlap_factor)))
+
+    #     # Calculate perpendicular direction
+    #     perp_direction = np.array([-direction_normalized[1], direction_normalized[0]])
+    #     angle_rad = np.arctan2(perp_direction[1], perp_direction[0])
+    #     angle_deg = np.rad2deg(angle_rad)
+
+    #     # Store original orientation and angle_axis
+    #     original_orientation = self.orientation
+    #     original_angle_axis = self.angle_axis
+
+    #     self.orientation = angle_deg
+    #     self.angle_axis = "x"
+
+    #     print(f"Line angle: {np.rad2deg(np.arctan2(direction_normalized[1], direction_normalized[0])):.2f}°")
+    #     print(f"Absorber orientation (perpendicular): {angle_deg:.2f}°")
+    #     print(f"Direction: {direction_normalized}")
+    #     print(f"Perpendicular: {perp_direction}")
+
+    #     # Place absorbers with overlap to eliminate gaps
+    #     absorber_centers = []
+    #     spacing = distance / num_absorbers  # Evenly distribute absorbers
+        
+    #     for i in range(num_absorbers):
+    #         center = start_point + (i + 0.5) * spacing * direction_normalized
+    #         # Check if absorber center is within grid bounds
+    #         if (-self.grid_size_sx/2 <= center[0] <= self.grid_size_sx/2 and 
+    #             -self.grid_size_sy/2 <= center[1] <= self.grid_size_sy/2):
+    #             absorber_centers.append(center)
+
+    #     print(f"Calculated {len(absorber_centers)} absorber centers with spacing: {spacing:.2f}mm")
+    #     print("Absorber centers:", absorber_centers)
+
+    #     # Create absorbers at each center position
+    #     for center in absorber_centers:
+    #         self.center_x_mm = center[0]
+    #         self.center_y_mm = center[1]
+    #         self.assemble_single_absorber()
+
+    #     # Restore original orientation
+    #     self.orientation = original_orientation
+    #     self.angle_axis = original_angle_axis
+
+    #     return self.geometry_objects
+
     def place_absorbers_between(self, start_point, end_point):
         print("Placing absorbers between points:", start_point, "and", end_point)
 
@@ -2451,14 +2512,14 @@ class Absorbers:
         direction_normalized = direction / np.linalg.norm(direction)
         distance = np.linalg.norm(direction)
 
-        # Adjust start/end points to account for absorber width
-        start_point = np.array(start_point) + (self.p / 2) * direction_normalized
-        end_point = np.array(end_point) - (self.p / 2) * direction_normalized
+        # Add safety margin to start/end points
+        safety_margin = self.p  # Use absorber base width as safety margin
+        start_point = np.array(start_point) + (safety_margin / 2) * direction_normalized
+        end_point = np.array(end_point) - (safety_margin / 2) * direction_normalized
         distance = np.linalg.norm(end_point - start_point)
 
-        # Calculate number of absorbers with overlap factor to eliminate gaps
-        # Use slightly smaller spacing to ensure overlap
-        overlap_factor = self.overall_factor  # 95% of p spacing = 5% overlap
+        # Calculate number of absorbers with overlap factor
+        overlap_factor = self.overall_factor
         num_absorbers = int(np.ceil(distance / (self.p * overlap_factor)))
 
         # Calculate perpendicular direction
@@ -2466,7 +2527,7 @@ class Absorbers:
         angle_rad = np.arctan2(perp_direction[1], perp_direction[0])
         angle_deg = np.rad2deg(angle_rad)
 
-        # Store original orientation and angle_axis
+        # Store original orientation
         original_orientation = self.orientation
         original_angle_axis = self.angle_axis
 
@@ -2475,24 +2536,26 @@ class Absorbers:
 
         print(f"Line angle: {np.rad2deg(np.arctan2(direction_normalized[1], direction_normalized[0])):.2f}°")
         print(f"Absorber orientation (perpendicular): {angle_deg:.2f}°")
-        print(f"Direction: {direction_normalized}")
-        print(f"Perpendicular: {perp_direction}")
 
-        # Place absorbers with overlap to eliminate gaps
+        # Place absorbers with bounds checking
         absorber_centers = []
-        spacing = distance / num_absorbers  # Evenly distribute absorbers
+        spacing = distance / num_absorbers
         
         for i in range(num_absorbers):
             center = start_point + (i + 0.5) * spacing * direction_normalized
-            # Check if absorber center is within grid bounds
-            if (-self.grid_size_sx/2 <= center[0] <= self.grid_size_sx/2 and 
-                -self.grid_size_sy/2 <= center[1] <= self.grid_size_sy/2):
+            
+            # Check if absorber center is within grid bounds with margin
+            margin = self.p  # Add margin equal to absorber base
+            if ((-self.grid_size_sx/2 + margin) <= center[0] <= (self.grid_size_sx/2 - margin) and 
+                (-self.grid_size_sy/2 + margin) <= center[1] <= (self.grid_size_sy/2 - margin)):
                 absorber_centers.append(center)
+            else:
+                print(f"⚠ Skipping absorber at {center} - too close to boundary")
 
-        print(f"Calculated {len(absorber_centers)} absorber centers with spacing: {spacing:.2f}mm")
+        print(f"Calculated {len(absorber_centers)} valid absorber centers with spacing: {spacing:.2f}mm")
         print("Absorber centers:", absorber_centers)
 
-        # Create absorbers at each center position
+        # Create absorbers at each valid center position
         for center in absorber_centers:
             self.center_x_mm = center[0]
             self.center_y_mm = center[1]
@@ -2719,6 +2782,41 @@ class Absorbers:
 
                 layer_count += 1
                 
+
+            # elif isinstance(orientation, float):
+            #     orientation_rad = np.radians(orientation)
+            #     if angle_axis == "x":
+            #         # Center position along the angled axis
+            #         x_pos = int(center_x + layer * np.cos(orientation_rad))
+            #         y_pos = int(center_y + layer * np.sin(orientation_rad))
+                    
+            #         # Direction perpendicular to the angle (for width)
+            #         perp_x = -np.sin(orientation_rad)
+            #         perp_y = np.cos(orientation_rad)
+                    
+            #         # Draw the width perpendicular to the angle direction
+            #         for w in range(-current_width//2, current_width//2 + 1):
+            #             x_line = int(x_pos + w * perp_x)
+            #             y_line = int(y_pos + w * perp_y)
+                        
+            #             # Add boundary check before accessing array
+            #             if (0 <= x_line < scaled_grid_size_sx and 
+            #                 0 <= y_line < scaled_grid_size_sy):
+            #                 absorber_array[y_line, x_line] = material_value
+            #             # else: silently skip out-of-bounds pixels
+
+            #         # Add substrate
+            #         if layer_count == 0:   
+            #             if add_substrate:
+            #                 centre_x_substrate, centre_y_substrate, size_x_substrate, size_y_substrate, angle_substrate = self._calculate_substrate_positions(orientation=orientation,
+            #                                                                                                                                                 center_x=center_x,
+            #                                                                                                                                                 center_y=center_y,
+            #                                                                                                                                                 substrate_thickness=substrate_thickness,
+            #                                                                                                                                                 substrate_material=substrate_material,
+            #                                                                                                                                                 scaled_base_width=scaled_base_width,
+            #                                                                                                                                                 resolution=resolution,
+            #                                                                                                                                                 angle_axis=angle_axis)
+
             elif isinstance(orientation, float):
                 orientation_rad = np.radians(orientation)
                 if angle_axis == "x":
@@ -2730,52 +2828,54 @@ class Absorbers:
                     perp_x = -np.sin(orientation_rad)
                     perp_y = np.cos(orientation_rad)
                     
+                    # Debug: Print bounds and positions
+                    if layer == 0:  # Only print once per absorber
+                        print(f"\n=== DEBUG INFO ===")
+                        print(f"Orientation angle: {orientation}°")
+                        print(f"Absorber center (pixels): ({center_x}, {center_y})")
+                        print(f"Grid bounds: x=[0, {scaled_grid_size_sx}), y=[0, {scaled_grid_size_sy})")
+                        print(f"Scaled pyramid height: {scaled_pyramid_height}")
+                        print(f"Scaled base width: {scaled_base_width}")
+                    
                     # Draw the width perpendicular to the angle direction
                     for w in range(-current_width//2, current_width//2 + 1):
                         x_line = int(x_pos + w * perp_x)
                         y_line = int(y_pos + w * perp_y)
-                        if 0 <= x_line < scaled_grid_size_sx and 0 <= y_line < scaled_grid_size_sy:
+                        
+                        # Debug: Print problematic positions
+                        if (x_line < 0 or x_line >= scaled_grid_size_sx or 
+                            y_line < 0 or y_line >= scaled_grid_size_sy):
+                            if layer == 0 and w == 0:  # Only print once
+                                print(f"⚠ Out-of-bounds detected at layer {layer}:")
+                                print(f"  x_pos={x_pos}, y_pos={y_pos}")
+                                print(f"  x_line={x_line}, y_line={y_line}")
+                                print(f"  current_width={current_width}")
+                        
+                        # Add boundary check before accessing array
+                        if (0 <= x_line < scaled_grid_size_sx and 
+                            0 <= y_line < scaled_grid_size_sy):
                             absorber_array[y_line, x_line] = material_value
+                        # else: silently skip out-of-bounds pixels
 
                     # Add substrate
                     if layer_count == 0:   
                         if add_substrate:
                             centre_x_substrate, centre_y_substrate, size_x_substrate, size_y_substrate, angle_substrate = self._calculate_substrate_positions(orientation=orientation,
-                                                                                                                                                        center_x=center_x,
-                                                                                                                                                        center_y=center_y,
-                                                                                                                                                        substrate_thickness=substrate_thickness,
-                                                                                                                                                        substrate_material=substrate_material,
-                                                                                                                                                        scaled_base_width=scaled_base_width,
-                                                                                                                                                        resolution=resolution,
-                                                                                                                                                        angle_axis=angle_axis)
-                                
+                                                                                                                                                            center_x=center_x,
+                                                                                                                                                            center_y=center_y,
+                                                                                                                                                            substrate_thickness=substrate_thickness,
+                                                                                                                                                            substrate_material=substrate_material,
+                                                                                                                                                            scaled_base_width=scaled_base_width,
+                                                                                                                                                            resolution=resolution,
+                                                                                                                                                            angle_axis=angle_axis)
+                        
                 elif angle_axis == "y":
                     # TODO: FIX THE BUG HERE!!
-                    # # Center position along the angled axis
-                    # x_pos = int(center_x + layer * np.sin(orientation_rad))
-                    # y_pos = int(center_y + layer * np.cos(orientation_rad))
-                    
-                    # # Direction perpendicular to the angle (for width)
-                    # perp_x = np.cos(orientation_rad)
-                    # perp_y = -np.sin(orientation_rad)
-                    
-                    # # Draw the width perpendicular to the angle direction
-                    # for w in range(-current_width//2, current_width//2 + 1):
-                    #     x_line = int(x_pos + w * perp_x)
-                    #     y_line = int(y_pos + w * perp_y)
-                    #     if 0 <= x_line < scaled_grid_size_sx and 0 <= y_line < scaled_grid_size_sy:
-                    #         absorber_array[y_line, x_line] = material_value 
-
-                    # if layer_count == 0:   
-                    #     if add_substrate:
-                    #         centre_x_substrate = center_x - (substrate_thickness/2)*resolution*np.cos(orientation_rad)
-                    #         centre_y_substrate = center_y - (substrate_thickness/2)*resolution*np.sin(orientation_rad)
-                    #         size_x_substrate = substrate_thickness * resolution
-                    #         size_y_substrate = scaled_base_width
-                    #         angle_substrate = orientation  
+                    # Add boundary check here too when this section is implemented
                     raise Warning("Y-axis orientation is not yet implemented yet!!")
 
                 layer_count += 1
+
                 
             else:
                 raise ValueError("Invalid orientation type")
