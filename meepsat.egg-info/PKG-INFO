@@ -29,6 +29,11 @@ We introduce a publicly available FDTD simulation code for CMB Telescopes "MeepS
 
 ## Getting Started
 
+### ReadTheDocs Documentation
+
+The ongoing documentation for MeepSAT can be found at: https://meepsat.readthedocs.io/en/latest/ 
+
+
 ### Prerequisites
 
 - Python 3.8 or higher

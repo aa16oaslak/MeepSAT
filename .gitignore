@@ -1,3 +1,8 @@
+# egg info doesn't gets commited
+*.egg-info/
+build/
+dist/
+
 # Ignore the output_files directory
 output_files/
 
