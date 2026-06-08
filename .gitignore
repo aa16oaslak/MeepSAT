@@ -9,6 +9,9 @@ output_files/
 # Ignore all the meep container
 recipe_for_MEEP_installation/
 
+# Ignore the processed data files
+processed_data/
+
 # Ignore all files with the following extensions
 *.err
 *.out
@@ -18,6 +21,13 @@ recipe_for_MEEP_installation/
 *.csv
 *.npz
 *.txt
+*.svg
+
+# Ignore pycache and ipynb checkpoints
+__pycache__/
+.ipynb_checkpoints/
+*.cpython-*.pyc
+
 
 # Exception: track requirements.txt files
 !requirements.txt
