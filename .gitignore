@@ -23,11 +23,11 @@ processed_data/
 *.txt
 *.svg
 
-# Ignore pycache and ipynb checkpoints
+# Ignore pycache, ipynb checkpoints, vscode settings
 __pycache__/
 .ipynb_checkpoints/
 *.cpython-*.pyc
-
+.vscode/
 
 # Exception: track requirements.txt files
 !requirements.txt
