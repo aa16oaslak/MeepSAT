@@ -61,7 +61,7 @@
       "aperture1": {
         "type": "square",
         "diameter": 220,
-        "pos_x": 1055,
+        "pos_x": 240,
         "thickness": 2,
         "material": "mp.perfect_electric_conductor",
         "conductivity": "mp.inf"
@@ -69,8 +69,8 @@
       "lens1_AL_mounting": {
         "type": "square",
         "diameter": 249.392,
-        "pos_x": 1050,
-        "thickness": 1,
+        "pos_x": 235,
+        "thickness": 2,
         "material": "mp.perfect_electric_conductor",
         "conductivity": "mp.inf",
         "y_centre_offset": [0, 0],
@@ -79,8 +79,8 @@
       "lens2_AL_mounting": {
         "type": "square",
         "diameter": 236.322,
-        "pos_x": 1280,
-        "thickness": 1,
+        "pos_x": 465,
+        "thickness": 2,
         "material": "mp.perfect_electric_conductor",
         "conductivity": "mp.inf",
         "y_centre_offset": [0, 0],
@@ -89,8 +89,8 @@
       "lens3_AL_mounting": {
         "type": "square",
         "diameter": 266.52,
-        "pos_x": 1450,
-        "thickness": 1,
+        "pos_x": 635,
+        "thickness": 2,
         "material": "mp.perfect_electric_conductor",
         "conductivity": "mp.inf",
         "y_centre_offset": [0, 0],

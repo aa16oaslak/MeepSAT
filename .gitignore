@@ -28,6 +28,7 @@ __pycache__/
 .ipynb_checkpoints/
 *.cpython-*.pyc
 .vscode/
+.DS_*
 
 # Exception: track requirements.txt files
 !requirements.txt
@@ -36,6 +37,9 @@ __pycache__/
 # Exception: track png files in images folder
 !docs/
 !docs/images/**/*.png
+
+# Exception
+!examples/auxilary_data/04_3lens_system_noARC/schematic_3lens.jpg
 
 # Add the CST and GRASP data for the simple single lens ARC example 
 !examples/auxilary_data/simple_single_lens_ARC/CST_data/**
