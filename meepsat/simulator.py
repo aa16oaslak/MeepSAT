@@ -125,6 +125,9 @@ def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_na
     epsilon : np.ndarray (optional)
         The extracted epsilon array if return_epsilon=True
     """
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+
     # Run simulation briefly to get epsilon
     simulation.run(until=0)
     epsilon = simulation.get_epsilon()
@@ -169,7 +172,13 @@ def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_na
     if handles:
         ax.legend(loc='upper right')
     
-    plt.colorbar(im, ax=ax, label='Permittivity (ε)')
+    # plt.colorbar(im, ax=ax, label='Permittivity (ε)')
+    
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="4%", pad=0.08)
+    cbar = fig.colorbar(im, cax=cax)
+    cbar.set_label('Permittivity (ε)')
+    
     ax.set_xlabel('X (mm)')
     ax.set_ylabel('Y (mm)')
     ax.set_title('Epsilon Map with Boundary Layers')
