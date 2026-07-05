@@ -2,6 +2,7 @@
 This module contains all the necessary functions for initialising, running and anlysing the simulation
 """
 
+import math
 import os
 import warnings
 from typing import Callable
@@ -19,59 +20,131 @@ import meepsat.permittivity_components as comp_eps # Importing the components ma
 import meepsat.helpers as exf # Importing the extra functions
 
 
-def calculate_runtime_parameters(source_freq, total_time, animation_timestep, points_per_period=10, 
-                                 extraction_offset=10):
-    """
-    Calculate runtime parameters for MEEP simulation including time step and extraction start time.
+# def calculate_runtime_parameters(source_freq, total_time, animation_timestep, points_per_period=10, 
+#                                  extraction_offset=10):
+#     """
+#     Calculate runtime parameters for MEEP simulation including time step and extraction start time.
     
+#     Parameters:
+#     -----------
+#     source_freq : float
+#         Source frequency in MEEP units 
+#     total_time : float
+#         Total simulation time in MEEP time units
+#     animation_timestep : float
+#         Time interval for animation frames in MEEP time units
+#     points_per_period : int, optional
+#         Number of sampling points per wave period (default: 10)
+#     extraction_offset : float, optional
+#         Time before end of simulation to start data extraction (default: 10)
+    
+#     Returns:
+#     --------
+#     dict
+#         Dictionary containing:
+#         - 'period': Time period of the source frequency
+#         - 'dt': Time step for sampling
+#         - 't0': Time to start data extraction
+#         - 'points_per_period': Number of points per period used
+#     """
+#     # Calculate the time period of the source frequency 
+#     period = 1 / source_freq  # Time period in MEEP time units
+    
+#     # Calculate time step to properly sample the wave
+#     dt = period / points_per_period  # Time step in MEEP time units
+    
+#     # Time after which we start extracting data
+#     t0 = int(total_time - extraction_offset)
+    
+#     runtime_params = {
+#         'period': period,
+#         'total_time': total_time,
+#         'dt': dt,
+#         't0': t0,
+#         'points_per_period': points_per_period,
+#         'animation_timestep': animation_timestep
+#     }
+    
+#     print(f"Runtime parameters calculated:")
+#     print(f"  Period: {period:.4f} MEEP time units")
+#     print(f"  Time step (dt): {dt:.4f} MEEP time units")
+#     print(f"  Extraction start time (t0): {t0} MEEP time units")
+#     print(f"  Points per period: {points_per_period}")
+#     print(f"  Animation timestep: {animation_timestep} MEEP time units")
+    
+#     return runtime_params
+
+def calculate_runtime_parameters(source_freq, resolution, steady_state_time, animation_timestep,
+                                 courant=0.5, min_periods_for_steady_state=10, periods_to_average=4,
+                              points_per_period=10):
+    """
+    Calculate exact runtime parameters compatible with MEEP's discrete timestep.
     Parameters:
     -----------
     source_freq : float
-        Source frequency in MEEP units (GHz)
-    total_time : float
-        Total simulation time in MEEP time units
-    animation_timestep : float
-        Time interval for animation frames in MEEP time units
+        Source frequency in MEEP units (dimensionless, c/a)
+    resolution : int
+        MEEP grid resolution (pixels per unit distance)
+    courant : float, optional
+        The Courant factor used by MEEP (default: 0.5)
+    min_periods_for_steady_state : int, optional
+        Number of periods to let the wave propagate before starting extraction
+    periods_to_average : int, optional
+        Number of full optical cycles to average fields over (must be an integer)
     points_per_period : int, optional
-        Number of sampling points per wave period (default: 10)
-    extraction_offset : float, optional
-        Time before end of simulation to start data extraction (default: 10)
-    
+        Target number of sampling points per wave period
     Returns:
     --------
     dict
-        Dictionary containing:
-        - 'period': Time period of the source frequency
-        - 'dt': Time step for sampling
-        - 't0': Time to start data extraction
-        - 'points_per_period': Number of points per period used
+        Validated parameters snapped to MEEP's internal grid clocks.
     """
-    # Calculate the time period of the source frequency 
-    period = 1 / source_freq  # Time period in MEEP time units
+    import math
     
-    # Calculate time step to properly sample the wave
-    dt = period / points_per_period  # Time step in MEEP time units
-    
-    # Time after which we start extracting data
-    t0 = int(total_time - extraction_offset)
+    # 1. Calculate fundamental continuous variables
+    period = 1.0 / source_freq
+    meep_internal_dt = courant / resolution  # Actual FDTD time step
+    # 2. Fix the sampling interval (dt) to match MEEP's internal clock
+    target_dt = period / points_per_period
+    # Calculate how many internal MEEP timesteps fit into our target sampling dt
+    steps_per_sample = max(1, round(target_dt / meep_internal_dt))
+    # True discrete dt that MEEP will actually use
+    actual_dt = steps_per_sample * meep_internal_dt
+    actual_points_per_period = period / actual_dt
+    # 3. Determine when to start sampling
+    if steady_state_time is not None:
+        # Snap user-provided steady-state time to the FDTD timestep
+        t0 = math.ceil(steady_state_time / meep_internal_dt) * meep_internal_dt
+    else:
+        # Estimate from the requested number of periods
+        t0 = math.ceil(
+            (min_periods_for_steady_state * period) / meep_internal_dt
+        ) * meep_internal_dt
+        
+    # 4. Enforce extraction window to be an EXACT integer multiple of the period
+    extraction_window = periods_to_average * period
+    total_time = t0 + extraction_window
     
     runtime_params = {
         'period': period,
-        'total_time': total_time,
-        'dt': dt,
-        't0': t0,
-        'points_per_period': points_per_period,
+        'meep_internal_dt': meep_internal_dt,
+        'dt': actual_dt,                         # Use this in meep.at_every(dt, ...)
+        't0': t0,                                 # Start averaging here
+        'total_time': total_time,                 # Stop simulation here
+        'points_per_period': actual_points_per_period,
+        'steps_per_sample': steps_per_sample,
         'animation_timestep': animation_timestep
     }
-    
-    print(f"Runtime parameters calculated:")
-    print(f"  Period: {period:.4f} MEEP time units")
-    print(f"  Time step (dt): {dt:.4f} MEEP time units")
-    print(f"  Extraction start time (t0): {t0} MEEP time units")
-    print(f"  Points per period: {points_per_period}")
-    print(f"  Animation timestep: {animation_timestep} MEEP time units")
-    
+    print(f"Validated MEEP Runtime Parameters:")
+    print(f"  Wave Period:                 {period:.4f} time units")
+    print(f"  MEEP Internal Timestep:      {meep_internal_dt:.6f} time units")
+    print(f"  Snapped Sampling Step (dt):  {actual_dt:.6f} time units (Every {steps_per_sample} FDTD steps)")
+    print(f"  Actual Points Per Period:    {actual_points_per_period:.2f}")
+    print(f"  Steady State Delay (t0):     {t0:.4f} time units")
+    print(f"  Total Run Time (total_time): {total_time:.4f} time units")
+    print(f"  Extraction Window Size:      {extraction_window:.4f} time units ({periods_to_average} full cycles)")
+    print(f"  Animation Timestep:          {animation_timestep:.4f} time units")
     return runtime_params
+
 
 def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_name, 
                           size_x, size_y, vmin=0.5, vmax=3, cmap='viridis', show_plot= False,

@@ -301,7 +301,7 @@ class AsphericLens(object):
             Distance from optical axis at which the sag is computed
         r : float
             Curvature radius of the lens
-        k : float
+        a : float
             Aspheric coefficient
         higher_order_coeffs [A1, A2, A3] : list, optional
             Higher-order aspheric coefficients (default : [0, 0, 0])
