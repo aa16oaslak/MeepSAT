@@ -5,7 +5,7 @@
       "primary_params": {
         "sim_type": "2D",
         "cell_size": {
-          "x": 330,
+          "x": 450,
           "y": 250,
           "z": 0
         },
@@ -29,7 +29,7 @@
     "sources": {
       "source1": {
           "type": "ContinuousPlaneWaves",
-          "center_x": -150,
+          "center_x": -210,
           "center_y": 0,
           "center_z": 0,
           "size_x": 0,
@@ -58,7 +58,7 @@
         "c2": -2.325625,
         "thick": 8,
         "diameter": 50,
-        "x": 176.6,
+        "x": 236.6,
         "y": 0,
         "AR_left_layers": [0.51],
         "AR_right_layers": [0.51],
