@@ -63,20 +63,6 @@ Due to the complex dependencies of the MEEP FDTD software, it is highly recommen
     cd MeepSAT
     pip install -e .
     ```
-    
-    **For public repository (once the project is public):**
-    ```bash
-    pip install git+https://github.com/aa16oaslak/MeepSAT.git
-    ```
-    
-    **For private repository (requires authentication):**
-    ```bash
-    pip install git+https://'your_token'@github.com/aa16oaslak/MeepSAT.git
-    ```
-    Replace ```'your_token' ``` with your PAT token generated in your github account.
-    For collaborators: If you need a token for the above, please contact the author @ aak25@hi.is
-    ```
-    
 
 4. **Check if everything is working with MeepSAT import or not**
     ```bash
