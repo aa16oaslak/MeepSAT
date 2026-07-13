@@ -251,30 +251,50 @@ def meepsat_farfield(efield,
              resolution,
              zero_pad_beam=15,
              plot_label='farfield'):
-    
+
+    print(f"Calculating far-field pattern for {plot_label}...")
+    # Keep the field complex so the FFT uses amplitude AND phase.
+    # (A magnitude-only array still works, but its far-field phase is meaningless.)
+    efield = np.asarray(efield, dtype=complex)
+    # coords may arrive as a pandas Series with non-positional labels
+    coords = np.asarray(coords, dtype=float)
+
+    n_fft = len(efield) * zero_pad_beam
+
     # List of frequencies
-    fft_freq = np.fft.fftfreq(len(efield)*zero_pad_beam, d=1/resolution)
+    fft_freq = np.fft.fftfreq(n_fft, d=1/resolution)
     # Shift the zero frequency component to the center
-    fft_freq = np.fft.fftshift(fft_freq) 
-    
+    fft_freq = np.fft.fftshift(fft_freq)
+
     # Calculate angles in degrees
     theta_rad = np.arctan(fft_freq * wavelength)
     theta_deg = theta_rad * (180 / np.pi)
-    
+
     # Calculate the FFTs of efield
-    fft_efield = np.fft.fft(efield, n=len(efield)*zero_pad_beam)
+    fft_efield = np.fft.fft(efield, n=n_fft)
     fft_efield = np.fft.fftshift(fft_efield)
-    
-    # Normalize by maximum amplitude
-    fft_efield_normalized = np.abs(fft_efield) / np.max(np.abs(fft_efield))
-    
+
+    # np.fft.fft assumes the first sample sits at y = 0, but the aperture
+    # actually starts at coords[0]. Remove the resulting linear phase ramp so
+    # the far-field phase is referenced to the true y = 0 origin. This is a
+    # pure phase factor and leaves power_dB untouched.
+    fft_efield = fft_efield * np.exp(-2j * np.pi * fft_freq * coords[0])
+
+    # Normalize by maximum amplitude (still complex)
+    fft_efield_normalized = fft_efield / np.max(np.abs(fft_efield))
+
+    # Far-field phase in radians
+    phase_rad = np.angle(fft_efield_normalized)
+
     # Convert to power in dB
-    fft_power = fft_efield_normalized**2
+    fft_power = np.abs(fft_efield_normalized)**2
     fft_power_dB = 10 * np.log10(fft_power/ np.max(fft_power))
-    
+
     return {
         'angle': theta_deg,
         'power_dB': fft_power_dB,
+        'phase_rad': phase_rad,
+        'complex_farfield': fft_efield_normalized,
         'plot_label': plot_label
     }
 
