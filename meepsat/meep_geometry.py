@@ -3806,15 +3806,14 @@ class Forebaffle(object):
     def __init__(self,
                  mpsat_sim,
                  epsilon_map,
+                 freq,
                  shape= 'linear',
                  angle_degrees=30,
                  x_vertex=None,
                  y_vertex=None,
                  material=None,
                  epsilon_real=5.4,
-                 epsilon_imag=0,
-                 freq=1/3,
-                 name=None,
+                 epsilon_imag=0,                 name=None,
                  components: Optional[List[ForebaffleComponent]] = None,
                  # Linear Forebaffle parameters :
                  hypotenuse=70,
@@ -3901,6 +3900,9 @@ class Forebaffle(object):
         '''
         self.mpsat_sim = mpsat_sim
         self.epsilon_map = epsilon_map
+        
+        # Update frequency for material properties
+        self.freq = freq
         
         # Basic parameters
         self.name = name if name else "Forebaffle"
@@ -4154,7 +4156,7 @@ class Forebaffle(object):
         if self.spline_add_absorbers:
             # Create absorber material properly
             if self.spline_abs_epsilon_imag != 0:
-                freq = 1/3
+                freq = self.freq  # Use the frequency defined in the forebaffle
                 abs_conductivity = self.spline_abs_epsilon_imag * 2 * np.pi * freq / self.spline_abs_epsilon_real
                 absorber_material = mp.Medium(epsilon=self.spline_abs_epsilon_real, 
                                              D_conductivity=abs_conductivity)

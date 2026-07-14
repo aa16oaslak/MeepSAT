@@ -5,7 +5,7 @@
       "primary_params": {
         "sim_type": "2D",
         "cell_size": {
-          "x": 500,
+          "x": 450,
           "y": 250,
           "z": 0
         },
@@ -29,19 +29,19 @@
     "sources": {
         "source1": {
             "type": "GaussianBeam",
-            "center_x": 200,
+            "center_x": 135,
             "center_y": 0,
             "center_z": 0,
             "size_x": 0,
             "size_y": 250,
             "size_z": 0,
             "component": "Ez",
-            "frequecy": 0.5003461427972281,
+            "frequecy": 0.5,
             "extra_args": {
               "start_time": 0,
               "end_time": "mp.inf",
               "angle": 180,
-              "width": 1.45756792, 
+              "width": 7.08, 
               "beam_x0": {
                   "x": 0,
                   "y": 0,
@@ -65,7 +65,7 @@
         "c2": -2.325625,
         "thick": 8,
         "diameter": 50,
-        "x": 322,
+        "x": 236.6,
         "y": 0,
         "AR_left_layers": [0.51],
         "AR_right_layers": [0.51],
@@ -77,8 +77,8 @@
     "apertures": {
           "aperture1": {
             "type": "square",
-            "diameter": 50,
-            "pos_x": 62,
+            "diameter": 45,
+            "pos_x": 1.6,
             "thickness": 1,
             "material": "mp.perfect_electric_conductor",
             "conductivity": "mp.inf",
@@ -88,7 +88,7 @@
            "lens1_mount": {
             "type": "square",
             "diameter": 50,
-            "pos_x": 74,
+            "pos_x": 13.6,
             "thickness": 1,
             "material": "mp.perfect_electric_conductor",
             "conductivity": "mp.inf",
