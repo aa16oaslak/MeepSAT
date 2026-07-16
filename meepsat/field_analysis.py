@@ -250,7 +250,10 @@ def meepsat_farfield(efield,
              wavelength,
              resolution,
              zero_pad_beam=15,
-             plot_label='farfield'):
+             plot_label='farfield',
+             window_type=None,
+             alpha=0.25,
+             std=1/6):
 
     print(f"Calculating far-field pattern for {plot_label}...")
     # Keep the field complex so the FFT uses amplitude AND phase.
@@ -258,6 +261,23 @@ def meepsat_farfield(efield,
     efield = np.asarray(efield, dtype=complex)
     # coords may arrive as a pandas Series with non-positional labels
     coords = np.asarray(coords, dtype=float)
+
+    # Apodize before the FFT so a hard aperture-edge truncation doesn't imprint
+    # its own sidelobe ripple/floor on top of the physical far-field pattern.
+    if window_type is not None:
+        from scipy.signal import windows
+        n = len(efield)
+        if window_type == 'hanning':
+            win = windows.hann(n)
+        elif window_type == 'hamming':
+            win = windows.hamming(n)
+        elif window_type == 'tukey':
+            win = windows.tukey(n, alpha=alpha)
+        elif window_type == 'gaussian':
+            win = windows.gaussian(n, std=n * std)
+        else:
+            raise ValueError(f"Unknown window_type: {window_type}")
+        efield = efield * win
 
     n_fft = len(efield) * zero_pad_beam
 
@@ -280,8 +300,14 @@ def meepsat_farfield(efield,
     # pure phase factor and leaves power_dB untouched.
     fft_efield = fft_efield * np.exp(-2j * np.pi * fft_freq * coords[0])
 
+    # Find the index of the maximum amplitude in the FFT result
+    max_idx = np.argmax(np.abs(fft_efield))
+    
+    # Divide the FFT result by the maximum amplitude to normalize it (includes both magnitude and phase)
+    fft_efield_normalized = fft_efield / fft_efield[max_idx]
+
     # Normalize by maximum amplitude (still complex)
-    fft_efield_normalized = fft_efield / np.max(np.abs(fft_efield))
+    # fft_efield_normalized = fft_efield / np.max(np.abs(fft_efield))
 
     # Far-field phase in radians
     phase_rad = np.angle(fft_efield_normalized)

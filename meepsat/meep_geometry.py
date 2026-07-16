@@ -3375,7 +3375,6 @@ class FlairComponent(ForebaffleComponent):
 # * ############################################################################################################
 
 logger = logging.getLogger(__name__)
-
 # * ############################################################################################################
 # * BASE CLASSES - Define abstract base class first
 # * ############################################################################################################
@@ -3803,6 +3802,8 @@ class Forebaffle(object):
     '''
     Class defining a triangular forebaffle structure.
     '''
+    _VALID_ABSORBER_SIDES = {'above', 'below', 'start_cap', 'end_cap'}
+
     def __init__(self,
                  mpsat_sim,
                  epsilon_map,
@@ -3813,7 +3814,8 @@ class Forebaffle(object):
                  y_vertex=None,
                  material=None,
                  epsilon_real=5.4,
-                 epsilon_imag=0,                 name=None,
+                 epsilon_imag=0,
+                 name=None,
                  components: Optional[List[ForebaffleComponent]] = None,
                  # Linear Forebaffle parameters :
                  hypotenuse=70,
@@ -3888,9 +3890,15 @@ class Forebaffle(object):
             Thickness of the forebaffle (default: 10)
         add_absorber: bool, optional
             Whether to add an absorber layer (default: True)
-        absorber_side: str, optional
-            Which side of the spline to add the absorber (default: 'above')
-            available options: ['above', 'below']
+        absorber_side: str or list of str, optional
+            Which side(s) of the spline to add the absorber (default: 'above').
+            Accepts a single side, or a list to compose multiple, e.g.
+            `['start_cap', 'above']`.
+            available options: ['above', 'below', 'start_cap', 'end_cap']
+            plus the shorthands 'both' (-> above+below) and 'all' (-> every side).
+            'start_cap'/'end_cap' cover the short exposed edge at the start/end
+            of the wall (the sharpest diffracting feature, left bare by
+            'above'/'below' alone).
         absorber_epsilon_real: float, optional
             Real part of the permittivity for the absorber (default: 5.4)
         absorber_epsilon_imag: float, optional
@@ -3901,7 +3909,7 @@ class Forebaffle(object):
         self.mpsat_sim = mpsat_sim
         self.epsilon_map = epsilon_map
         
-        # Update frequency for material properties
+        # Freq
         self.freq = freq
         
         # Basic parameters
@@ -3957,13 +3965,39 @@ class Forebaffle(object):
             self.spline_degree = spline_degree
             self.spline_smoothing = spline_smoothing
             self.spline_add_absorbers = add_absorber
-            self.spline_absorber_side = absorber_side
+            self.spline_absorber_side = self._normalize_absorber_sides(absorber_side)
             self.spline_abs_thickness =absorber_thickness
             self.spline_abs_epsilon_real = absorber_epsilon_real
             self.spline_abs_epsilon_imag = absorber_epsilon_imag
 
     def __str__(self):
         return f"{self.name}: angle={self.angle_degrees}°, height={self.height}"
+
+    def _normalize_absorber_sides(self, absorber_side):
+        """
+        Normalize `absorber_side` into a set of concrete sides.
+
+        Accepts a single string (e.g. 'above') or a list/tuple/set of strings
+        (e.g. ['start_cap', 'above']). The shorthands 'both' (-> above+below)
+        and 'all' (-> every side) expand to multiple sides each.
+        """
+        if isinstance(absorber_side, str):
+            absorber_side = [absorber_side]
+
+        sides = set()
+        for side in absorber_side:
+            if side == 'both':
+                sides.update({'above', 'below'})
+            elif side == 'all':
+                sides.update(self._VALID_ABSORBER_SIDES)
+            elif side in self._VALID_ABSORBER_SIDES:
+                sides.add(side)
+            else:
+                raise ValueError(
+                    f"Invalid absorber_side entry '{side}'. Must be one of "
+                    f"{sorted(self._VALID_ABSORBER_SIDES)} or the shorthands "
+                    f"'both'/'all'.")
+        return sides
     
     def _calculate_base_height_from_angle_hypotenuse(self, angle_degrees, hypotenuse):
         angle_radians = np.radians(angle_degrees)
@@ -4052,8 +4086,7 @@ class Forebaffle(object):
                 v1 = mp.Vector3(v1.x, v1.y + boundary_layer_size)
                 v2 = mp.Vector3(v2.x, v2.y + boundary_layer_size)
                 v3 = mp.Vector3(v3.x, v3.y + boundary_layer_size)
-                print(f"Adjusted vertices for boundary layer: v1={v1}, v2={v2}, v3={v3}")
-                
+                print(f"Adjusted vertices for boundary layer: v1={v1}, v2={v2}, v3={v3}")        
         else:
             logger.warning(f"Unknown forebaffle name '{self.name}' - no boundary layer adjustment applied")
             
@@ -4156,7 +4189,7 @@ class Forebaffle(object):
         if self.spline_add_absorbers:
             # Create absorber material properly
             if self.spline_abs_epsilon_imag != 0:
-                freq = self.freq  # Use the frequency defined in the forebaffle
+                freq = self.freq
                 abs_conductivity = self.spline_abs_epsilon_imag * 2 * np.pi * freq / self.spline_abs_epsilon_real
                 absorber_material = mp.Medium(epsilon=self.spline_abs_epsilon_real, 
                                              D_conductivity=abs_conductivity)
@@ -4174,7 +4207,7 @@ class Forebaffle(object):
                 y1 = float(spline(x1))
                 y2 = float(spline(x2))
                 
-                if self.spline_absorber_side in ['above', 'both']:
+                if 'above' in self.spline_absorber_side:
                     # Absorber above
                     v1_inner = mp.Vector3(x1, y1 + thickness/2)
                     v2_inner = mp.Vector3(x2, y2 + thickness/2)
@@ -4189,13 +4222,13 @@ class Forebaffle(object):
                     )
                     geometries.append(absorber_prism)
                 
-                if self.spline_absorber_side in ['below', 'both']:
+                if 'below' in self.spline_absorber_side:
                     # Absorber below
                     v1_outer = mp.Vector3(x1, y1 - thickness/2 - absorber_thickness)
                     v2_outer = mp.Vector3(x2, y2 - thickness/2 - absorber_thickness)
                     v2_inner = mp.Vector3(x2, y2 - thickness/2)
                     v1_inner = mp.Vector3(x1, y1 - thickness/2)
-                    
+
                     absorber_prism = mp.Prism(
                         vertices=[v1_outer, v2_outer, v2_inner, v1_inner],
                         height=self.height,
@@ -4203,8 +4236,54 @@ class Forebaffle(object):
                         material=absorber_material
                     )
                     geometries.append(absorber_prism)
-        
+
+            # Cap the exposed short edges at the ends of the wall - 'above'/'below'
+            # only coat the long faces, leaving the wall's terminal edges (the
+            # sharpest diffracting feature) bare even when both faces are covered.
+            if 'start_cap' in self.spline_absorber_side:
+                geometries.append(self._create_end_cap_absorber(
+                    x_edge=x_start, y_edge=float(spline(x_start)),
+                    thickness=thickness, absorber_thickness=absorber_thickness,
+                    absorber_material=absorber_material, direction=-1))
+
+            if 'end_cap' in self.spline_absorber_side:
+                geometries.append(self._create_end_cap_absorber(
+                    x_edge=x_end, y_edge=float(spline(x_end)),
+                    thickness=thickness, absorber_thickness=absorber_thickness,
+                    absorber_material=absorber_material, direction=1))
+
         return geometries
+
+    def _create_end_cap_absorber(self, x_edge, y_edge, thickness, absorber_thickness,
+                                  absorber_material, direction):
+        """
+        Cap the exposed short edge at one end of the spline wall with an absorber
+        block, extending outward from (x_edge, y_edge) by `absorber_thickness`
+        along x (`direction` = -1 for the start edge, +1 for the end edge).
+
+        Spans the full above/below stack when those sides are also active, so
+        there's no bare gap at the corner where a cap meets a face absorber.
+        """
+        half_above = thickness / 2 + (
+            absorber_thickness if 'above' in self.spline_absorber_side else 0)
+        half_below = thickness / 2 + (
+            absorber_thickness if 'below' in self.spline_absorber_side else 0)
+
+        x_outer = x_edge + direction * absorber_thickness
+
+        vertices = [
+            mp.Vector3(x_edge, y_edge - half_below),
+            mp.Vector3(x_outer, y_edge - half_below),
+            mp.Vector3(x_outer, y_edge + half_above),
+            mp.Vector3(x_edge, y_edge + half_above),
+        ]
+
+        return mp.Prism(
+            vertices=vertices,
+            height=self.height,
+            axis=mp.Vector3(0, 0, 1),
+            material=absorber_material
+        )
 
     def assemble(self):
         """
@@ -4238,31 +4317,6 @@ class Forebaffle(object):
             
             return geometries
         
-        # elif self.fb_shape == 'spline':
-        #     self.epsilon_map = self._create_spline_forebaffle(epsilon_map= self.epsilon_map,
-        #                                                       start_vertex=v3,
-        #                                                       end_vertex=v1)
-
-        #     logger.info(f"Forebaffle assembled with spline shape. The following parameters were used:\n"
-        #                 f"    start vertex: {v1}\n"
-        #                 f"    end vertex: {v3}\n"
-        #                 f"    forebaffle_epsilon: {self.epsilon_real + self.epsilon_imag * 1j}\n"
-        #                 f"    forebaffle_thickness: {self.spline_fb_thickness}\n"
-        #                 f"    absorber_epsilon: {self.spline_abs_epsilon_real + self.spline_abs_epsilon_imag * 1j}\n"
-        #                 f"    absorber_thickness: {self.spline_abs_thickness}\n"
-        #                 f"    spline_add_absorbers: {self.spline_add_absorbers}\n"
-        #                 f"    spline_absorber_side: {self.spline_absorber_side}")
-            
-        #     return self.epsilon_map
-        
-        # elif self.fb_shape == 'spline':
-            
-        #     geometries = self._create_spline_forebaffle_with_prisms(
-        #         start_vertex=v3,
-        #         end_vertex=v1
-        #     )
-        #     logger.info(f"Forebaffle assembled with {len(geometries)} spline prism segments")
-        #     return geometries
         elif self.fb_shape == 'spline':
             
             # Ensure start_vertex has smaller x-coordinate for monotonic spline
@@ -4281,7 +4335,3 @@ class Forebaffle(object):
         else:
             raise ValueError(f"Unknown forebaffle shape '{self.fb_shape}'")
         
-
-    
-
-
