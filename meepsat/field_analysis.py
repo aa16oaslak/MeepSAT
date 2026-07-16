@@ -2096,6 +2096,43 @@ def efield_list_from_monitors_from_lens1(current_dir, freq_folder_array, time_ar
 
 
 #==================================================================================
-#==================================================================================
+#=========POST SIMULATION UTILITIES================================================
 #==================================================================================
 
+def plot_field(simname, field_db, title, filename, xcoords, ycoords, freq,
+                vmin=-80, vmax=0, 
+                savepath= os.path.join('./../processed_data/'),
+                    show_plots=True,
+                    mark_x = None):
+    
+    import matplotlib.pyplot as plt
+    plt.style.use('default')
+    
+    plt.figure(figsize=(8, 6))
+    plt.imshow(field_db.T, extent=(xcoords[0], xcoords[-1], ycoords[0], ycoords[-1]),
+            origin='lower', cmap='inferno', vmin=vmin, vmax=vmax)
+    if mark_x is not None:
+        plt.axvline(x=mark_x, color='white', linestyle='--')
+    plt.colorbar(label='dB')
+    plt.title(title)
+    plt.xlabel('x (mm)')
+    plt.ylabel('y (mm)')
+
+    if savepath:
+        # Create directory with simname and frequency subdirectories
+        save_dir = savepath
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(os.path.join(save_dir, filename), dpi=300)
+        # Save as a svg file as well for publication
+        # plt.savefig(os.path.join(save_dir, filename).replace('.png', '.svg'), dpi=300) 
+        print(f"{title} plot saved to: {os.path.join(save_dir, filename)}")
+    if show_plots:
+        plt.show()
+
+def load_fields(basepath, filename):
+    # Construct the full path to the file
+    filepath = os.path.join(basepath, filename)
+    # Load the fields stored in npz files
+    data = np.load(filepath)
+
+    return data
