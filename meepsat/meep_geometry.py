@@ -3877,7 +3877,9 @@ class Forebaffle(object):
         num_periods: int, optional (only needed if shape = 'spline')
             Number of oscillations between start and end (default: 1)
         amplitude: float, optional (only needed if shape = 'spline')
-            Amplitude of oscillation in mm (default: 5)
+            Amplitude of oscillation in mm (default: 5). Positive amplitude
+            bulges toward the baffle's v1 (base-vertex) side, so top/bottom
+            baffles built from mirrored vertices produce mirrored shapes.
         no_of_points: int, optional (only needed if shape = 'spline')
             Number of points between start and end (default: 300)
         scaling_factor: float, optional (only needed if shape = 'spline')
@@ -4119,9 +4121,14 @@ class Forebaffle(object):
         
         # Spline parameters
         num_periods = self.spline_num_periods
-        amplitude = self.spline_amplitude
         factor = self.spline_scaling_factor
         no_of_points = self.spline_no_of_points
+
+        # Orient the sinusoidal modulation with the baffle's opening direction so
+        # that top/bottom baffles built from mirrored vertices are mirror images:
+        # positive amplitude always bulges toward the v1 (optical-axis) side.
+        y_orientation = 1.0 if self.v1.y >= self.v3.y else -1.0
+        amplitude = self.spline_amplitude * y_orientation
         
         # Generate spline curve
         x_points = np.linspace(x_start, x_end, num=no_of_points)
