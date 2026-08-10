@@ -18,7 +18,7 @@ import meepsat.helpers as exf
 # ! THE FOLLOWING SEGMENT OF THE CODE WAS TAKEN FROM THE MEEPART CODE
 # ! AND ADAPTED TO THE NEW STRUCTURE OF THE CODE IN THE MEEPSAT PACKAGE
   
-# ~ LENS CLASS
+# ----------------------------------- Aspheric Lens ----------------------------------- #
 class AsphericLens(object):
     '''
     Class defining an aspheric lens of arbitrary shape and 
@@ -1852,7 +1852,7 @@ class AsphericLens(object):
         return self.permittivity_map, self.stepped_pyramid_blocks
             
 
-#~ Feedhorn class
+# ----------------------------------- Feedhorn ----------------------------------- #
 
 class FeedHorn(object):
     """
