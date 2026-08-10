@@ -12,7 +12,10 @@ import pandas as pd
 import json
 from scipy import ndimage
 
-@profile
+
+
+
+
 def get_MEEP_ff(simulation,
                 ff_distance = None,
                 ff_angle = None,
@@ -2136,3 +2139,351 @@ def load_fields(basepath, filename):
     data = np.load(filepath)
 
     return data
+
+
+
+"""
+2D near-to-far-field (NTFF) tools for the single-lens baffle sims.
+
+Why this exists
+---------------
+The far field produced by the 1D FFT of a single Ez line (meepsat_farfield)
+cannot represent wide angles: radiation heading toward |theta| > ~45 deg exits
+the cell through the top/bottom PML and never crosses a vertical line, and the
+line itself is hard-truncated inside the PML. This module instead evaluates the
+frequency-domain surface-equivalence integral on a closed rectangular contour
+enclosing ALL sources (source line, lens, tube, baffles), which captures the
+sideways-radiated power and gives the correct obliquity behaviour.
+
+The contour must enclose every radiating structure. A partial box around just
+the baffle region would, by the equivalence principle, return only the field
+scattered by whatever is inside it and miss the direct beam.
+
+Formulation (2D, Ez/TM polarization, meep's exp(-i w t) phasor convention):
+
+    F(theta) = sum over contour of
+               [ Ez (n . rhat) - eta (nx Hy - ny Hx) ] exp(-j k rhat . r') dl
+
+with rhat = (-cos theta, sin theta) so theta = 0 is the -x beam direction,
+eta = 1 in meep units. Far-field power pattern ~ |F|^2. The saved
+"time-averaged" fields are the true phasors times one global complex constant
+(plain average of snapshots sampled ~10x/period), which cancels in every
+normalized quantity used here.
+"""
+
+import os
+
+import numpy as np
+
+
+C_MM_S = 299792458.0 * 1000.0  # speed of light in mm/s
+
+
+# ---------------------------------------------------------------------------
+# Field loading and contour extraction (with per-case caching)
+# ---------------------------------------------------------------------------
+
+def load_case_fields(case_dir):
+    """Load complex Ez, Hx, Hy and grid coords from a sim output directory."""
+    e = np.load(os.path.join(case_dir, "efield_timeavg.npz"))
+    h = np.load(os.path.join(case_dir, "hfield_timeavg.npz"))
+    xyzw = np.load(os.path.join(case_dir, "xyzw.npz"))
+    ez = e["ez_real"] + 1j * e["ez_imag"]
+    hx = h["hx_real"] + 1j * h["hx_imag"]
+    hy = h["hy_real"] + 1j * h["hy_imag"]
+    return xyzw["x_coords"], xyzw["y_coords"], ez, hx, hy
+
+
+def extract_box_contour(case_dir, box, #=(-240.0, 240.0, -115.0, 115.0),
+                        slice_x=None, use_cache=True):
+    """
+    Extract Ez/Hx/Hy on the four sides of a rectangular contour, plus an
+    optional extra vertical Ez line at slice_x for the 1D cross-check method.
+
+    Decompressing the full-field npz dominates the cost, so the result is
+    cached in the case directory keyed by the box/slice parameters.
+
+    Returns a dict with points (N,2), normals (N,2), ez/hx/hy (N,), dl, and
+    (if slice_x given) slice_y, slice_ez.
+    """
+    x0, x1, y0, y1 = box
+    tag = f"x{x0:g}_{x1:g}_y{y0:g}_{y1:g}_s{'none' if slice_x is None else f'{slice_x:g}'}"
+    cache_path = os.path.join(case_dir, f"ntff_contour_{tag}.npz")
+    if use_cache and os.path.exists(cache_path):
+        d = np.load(cache_path)
+        return {k: d[k] for k in d.files}
+
+    x, y, ez, hx, hy = load_case_fields(case_dir)
+    ix0, ix1 = (np.abs(x - x0)).argmin(), (np.abs(x - x1)).argmin()
+    iy0, iy1 = (np.abs(y - y0)).argmin(), (np.abs(y - y1)).argmin()
+    dl = float(np.mean(np.diff(x)))
+
+    pts, nrm, cez, chx, chy = [], [], [], [], []
+
+    def add_side(ixs, iys, normal):
+        xs, ys = np.broadcast_arrays(x[ixs], y[iys])
+        pts.append(np.column_stack([xs.ravel(), ys.ravel()]))
+        n = np.tile(normal, (xs.size, 1))
+        nrm.append(n)
+        cez.append(ez[ixs, iys].ravel())
+        chx.append(hx[ixs, iys].ravel())
+        chy.append(hy[ixs, iys].ravel())
+
+    yspan = np.arange(iy0, iy1 + 1)
+    xspan = np.arange(ix0 + 1, ix1)  # horizontal sides exclude the corners
+    add_side(ix0, yspan, (-1.0, 0.0))            # left
+    add_side(ix1, yspan, (+1.0, 0.0))            # right
+    add_side(xspan, iy0, (0.0, -1.0))            # bottom
+    add_side(xspan, iy1, (0.0, +1.0))            # top
+
+    out = {
+        "points": np.concatenate(pts),
+        "normals": np.concatenate(nrm),
+        "ez": np.concatenate(cez),
+        "hx": np.concatenate(chx),
+        "hy": np.concatenate(chy),
+        "dl": np.array(dl),
+        "box": np.array(box),
+    }
+    if slice_x is not None:
+        isx = (np.abs(x - slice_x)).argmin()
+        out["slice_y"] = y
+        out["slice_ez"] = ez[isx, :]
+        out["slice_x_actual"] = np.array(x[isx])
+
+    if use_cache:
+        np.savez_compressed(cache_path, **out)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Far-field transforms
+# ---------------------------------------------------------------------------
+
+def ntff_2d(contour, wavelength, angles_deg, eta=1.0, angle_chunk=256):
+    """
+    Closed-contour surface-equivalence far field.
+
+    Returns the complex far-field amplitude F(theta) (unnormalized); the
+    power pattern is |F|^2. theta is measured from the -x beam axis,
+    positive toward +y.
+    """
+    k = 2.0 * np.pi / wavelength
+    th = np.deg2rad(np.asarray(angles_deg, dtype=float))
+    rhat = np.stack([-np.cos(th), np.sin(th)])  # (2, Nang)
+
+    pts = contour["points"]
+    nrm = contour["normals"]
+    ez = contour["ez"]
+    jz = nrm[:, 0] * contour["hy"] - nrm[:, 1] * contour["hx"]
+    dl = float(contour["dl"])
+
+    F = np.empty(th.size, dtype=complex)
+    for a in range(0, th.size, angle_chunk):
+        r = rhat[:, a:a + angle_chunk]
+        proj = pts @ r                       # (N, chunk)
+        ndotr = nrm @ r
+        integrand = ez[:, None] * ndotr - eta * jz[:, None]
+        F[a:a + angle_chunk] = (integrand * np.exp(-1j * k * proj)).sum(axis=0) * dl
+    return F
+
+
+def farfield_1d_slice(ez_line, y_coords, wavelength, y_max=None,
+                      window="tukey", alpha=0.25, zero_pad=15):
+    """
+    Cleaned-up version of the single-line FFT method, for cross-checking:
+    - trims the line to |y| <= y_max (drop PML-contaminated samples),
+    - apodizes (Tukey) so the truncation doesn't imprint its own sidelobes,
+    - maps spatial frequency with sin(theta) = f*lambda (not tan) and drops
+      the evanescent region |f*lambda| > 1, which the FFT would otherwise
+      spray across the wide-angle floor,
+    - applies the cos(theta) obliquity factor.
+
+    Returns (angles_deg, power_lin) with power ~ |cos(theta) A(k sin theta)|^2.
+    """
+    ez_line = np.asarray(ez_line, dtype=complex)
+    y = np.asarray(y_coords, dtype=float)
+    if y_max is not None:
+        keep = np.abs(y) <= y_max
+        ez_line, y = ez_line[keep], y[keep]
+
+    if window == "tukey":
+        from scipy.signal import windows
+        ez_line = ez_line * windows.tukey(ez_line.size, alpha=alpha)
+    elif window is not None:
+        raise ValueError(f"Unknown window: {window}")
+
+    dy = float(np.mean(np.diff(y)))
+    n_fft = ez_line.size * zero_pad
+    f = np.fft.fftshift(np.fft.fftfreq(n_fft, d=dy))
+    A = np.fft.fftshift(np.fft.fft(ez_line, n=n_fft))
+
+    s = f * wavelength                    # sin(theta)
+    keep = np.abs(s) <= 1.0
+    theta = np.rad2deg(np.arcsin(s[keep]))
+    power = (np.cos(np.deg2rad(theta)) * np.abs(A[keep])) ** 2
+    return theta, power
+
+
+# ---------------------------------------------------------------------------
+# Robust comparison metrics
+# ---------------------------------------------------------------------------
+
+def power_db(power_lin, ref=None):
+    p = np.asarray(power_lin, dtype=float)
+    ref = p.max() if ref is None else ref
+    return 10.0 * np.log10(p / ref + 1e-300)
+
+
+def band_power_fractions(angles_deg, power_lin, edges, #=(0.0, 5.0, 25.0, 50.0, 90.0),
+                         fold=True):
+    """Fraction of total radiated power per |theta| band.
+
+    The +theta and -theta halves of a band are disjoint intervals, so they are
+    integrated separately - a single trapezoid over the combined mask would
+    bridge the gap across the main lobe.
+
+    fold=True (default) sums the +theta and -theta halves together, as if the
+    pattern were mirror-symmetric about theta=0 - correct only when the
+    radiating geometry actually has that symmetry (e.g. a centered pixel with
+    a baffle that is itself symmetric about the same axis). fold=False keeps
+    the two sides separate and returns {'pos': ndarray, 'neg': ndarray} - use
+    this whenever the geometry has no reason to be mirror-symmetric (e.g. an
+    off-axis pixel, where the beam can strike the near and far baffle wings at
+    genuinely different incidence angles).
+    """
+    a = np.asarray(angles_deg, dtype=float)
+    p = np.asarray(power_lin)
+    total = np.trapezoid(p, a)
+    pos_fracs, neg_fracs = [], []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        pos_mask = (a >= lo) & (a < hi)
+        neg_mask = (a <= -lo) & (a > -hi)
+        pos = np.trapezoid(p[pos_mask], a[pos_mask]) / total if pos_mask.sum() > 1 else 0.0
+        neg = np.trapezoid(p[neg_mask], a[neg_mask]) / total if neg_mask.sum() > 1 else 0.0
+        pos_fracs.append(pos)
+        neg_fracs.append(neg)
+    if fold:
+        return np.array(pos_fracs) + np.array(neg_fracs)
+    return {'pos': np.array(pos_fracs), 'neg': np.array(neg_fracs)}
+
+
+def encircled_power(angles_deg, power_lin):
+    """Cumulative fraction of power within |theta|, vs |theta|.
+
+    Assumes theta=0 is both the pattern's center of symmetry and its peak -
+    valid for a centered pixel. For an off-axis beam use
+    encircled_power_centered(..., center_deg=beam_peak_angle(...)) instead.
+    """
+    a = np.abs(np.asarray(angles_deg))
+    p = np.asarray(power_lin)
+    order = np.argsort(a)
+    a_sorted, p_sorted = a[order], p[order]
+    cum = np.cumsum(p_sorted)
+    return a_sorted, cum / cum[-1]
+
+
+def encircled_power_centered(angles_deg, power_lin, center_deg=0.0):
+    """Cumulative fraction of power within |theta - center_deg|.
+
+    Generalizes encircled_power to fold about an arbitrary center instead of
+    theta=0 (center_deg=0.0 reproduces encircled_power exactly). Answers "how
+    tightly is this beam packed around its own chief ray" - a beam-quality
+    metric that stays meaningful even when that ray doesn't point along the
+    mechanical axis (pass center_deg=beam_peak_angle(angles_deg, power_lin)).
+    """
+    a = np.abs(np.asarray(angles_deg, dtype=float) - center_deg)
+    p = np.asarray(power_lin)
+    order = np.argsort(a)
+    a_sorted, p_sorted = a[order], p[order]
+    cum = np.cumsum(p_sorted)
+    return a_sorted, cum / cum[-1]
+
+
+def cumulative_power(angles_deg, power_lin):
+    """Monotonic signed CDF: fraction of power at angle <= theta, swept over
+    the full signed angle range - no folding or centering assumption.
+
+    Answers "how much power has spilled past a given FIXED angle relative to
+    the mechanical axis" - the quantity a baffle that is itself symmetric
+    about theta=0 actually constrains, regardless of where the beam being
+    baffled happens to point. Unlike encircled_power/encircled_power_centered,
+    this needs no decision about where the pattern is centered.
+    """
+    a = np.asarray(angles_deg, dtype=float)
+    p = np.asarray(power_lin, dtype=float)
+    order = np.argsort(a)
+    a_sorted, p_sorted = a[order], p[order]
+    cum = np.cumsum(p_sorted)
+    return a_sorted, cum / cum[-1]
+
+
+def beam_peak_angle(angles_deg, power_lin, search_window=None, db_window=3.0):
+    """Power-weighted centroid angle of the main lobe.
+
+    search_window: optional (lo_deg, hi_deg) restricting the peak search to a
+        neighborhood of the geometrically-expected chief ray, guarding against
+        latching onto a distant, unrelated sidelobe. Default None searches the
+        full angle array, which is safe whenever the main lobe dominates by
+        tens of dB (true for both the on-axis and edge-pixel cases here).
+    db_window: dB down from the local max defining the contiguous main-lobe
+        mask (default 3.0 = half-power).
+
+    The mask is grown outward from the peak index one sample at a time and
+    stops at the first drop below threshold on each side, so it stays a single
+    contiguous region around the true peak even if some other sidelobe
+    elsewhere also happens to cross the same threshold.
+    """
+    a = np.asarray(angles_deg, dtype=float)
+    p = np.asarray(power_lin, dtype=float)
+    if search_window is not None:
+        lo, hi = search_window
+        mask = (a >= lo) & (a <= hi)
+        idx_local = np.where(mask)[0]
+        idx_pk = idx_local[np.argmax(p[idx_local])]
+    else:
+        idx_pk = int(np.argmax(p))
+
+    threshold = p[idx_pk] * 10.0 ** (-db_window / 10.0)
+    lo_idx = idx_pk
+    while lo_idx > 0 and p[lo_idx - 1] >= threshold:
+        lo_idx -= 1
+    hi_idx = idx_pk
+    while hi_idx < p.size - 1 and p[hi_idx + 1] >= threshold:
+        hi_idx += 1
+
+    lobe_a = a[lo_idx:hi_idx + 1]
+    lobe_p = p[lo_idx:hi_idx + 1]
+    return float(np.sum(lobe_a * lobe_p) / np.sum(lobe_p))
+
+
+def envelope_db(angles_deg, power_lin, width_deg=1.0, q=95):
+    """Percentile envelope of the power pattern in angular bins, in dB.
+
+    Replaces raw pointwise dB (and find_peaks scatter): the deep-sidelobe
+    'grass' is incoherent, so a per-bin percentile is the stable summary.
+    """
+    a = np.asarray(angles_deg, dtype=float)
+    p = np.asarray(power_lin, dtype=float)
+    edges = np.arange(a.min(), a.max() + width_deg, width_deg)
+    centers, env = [], []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        m = (a >= lo) & (a < hi)
+        if m.any():
+            centers.append(0.5 * (lo + hi))
+            env.append(np.percentile(p[m], q))
+    return np.array(centers), power_db(np.array(env), ref=p.max())
+
+
+def noise_floor_db(case_dir, wavelength, angles_deg,
+                   box_a,#=(-240.0, 240.0, -115.0, 115.0),
+                   box_b):#=(-230.0, 235.0, -112.0, 118.0)):
+    """
+    Numerical noise-floor estimate via contour independence: a correct NTFF is
+    invariant under contour placement, so |F_boxA - F_boxB|^2 (relative to the
+    boxA peak) measures everything that is NOT physical radiation.
+    """
+    fa = ntff_2d(extract_box_contour(case_dir, box=box_a), wavelength, angles_deg)
+    fb = ntff_2d(extract_box_contour(case_dir, box=box_b), wavelength, angles_deg)
+    ref = (np.abs(fa) ** 2).max()
+    return power_db(np.abs(fa - fb) ** 2, ref=ref), fa, fb

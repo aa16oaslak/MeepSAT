@@ -9,7 +9,7 @@
         "y": 54,
         "z": 0
       },
-      "resolution": 15,
+      "resolution": 8,
       "smallest_freq": 0.25
     }
   },
@@ -35,12 +35,12 @@
       "size_y": 50,
       "size_z": 0,
       "component": "Ez",
-      "frequecy": 0.5003461427972281,
+      "frequecy": 0.5,
       "extra_args": {
         "start_time": 0,
         "end_time": "mp.inf",
         "angle": 180,
-        "width": 1.166,
+        "width": 1.45756792,
         "beam_x0": {
           "x": 0,
           "y": 0,
@@ -86,8 +86,8 @@
       "diameter": 50,
       "pos_x": -49,
       "thickness": 1,
-      "material": "mp.perfect_electric_conductor",
-      "conductivity": "mp.inf",
+      "material": null,
+      "conductivity": 20,
       "y_centre_offset": [
         0,
         0
@@ -95,15 +95,16 @@
       "y_size_offset": [
         0,
         0
-      ]
+      ],
+      "n_refr": 1.5
     },
     "aperture1": {
       "type": "square",
       "diameter": 45,
       "pos_x": -60,
       "thickness": 1,
-      "material": "mp.perfect_electric_conductor",
-      "conductivity": "mp.inf",
+      "material": null,
+      "conductivity": 20,
       "y_centre_offset": [
         0,
         0
@@ -111,12 +112,13 @@
       "y_size_offset": [
         0,
         0
-      ]
+      ],
+      "n_refr": 1.5
     }
   },
   "output": {
     "savepath": {
-      "path": "auxilary_data/01_simple_single_lens_ARC/output_files/150.0GHz"
+      "path": "../output_files/"
     },
     "animation_options": {
       "get_mp4": true,
