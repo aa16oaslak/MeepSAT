@@ -1853,13 +1853,13 @@ class AsphericLens(object):
             
 
 #~ Feedhorn class
-#@profile
+
 class FeedHorn(object):
     """
     Class defining an FeedHorn from a txt file containing the geometry information about
     the Horn in r vs z.
     """
-    #@profile
+    
     def __init__(self,
                  mpsat_sim,
                  eps,
@@ -1956,7 +1956,7 @@ class FeedHorn(object):
         self.sy = mpsat_sim.cell_size[1]
         self.res = mpsat_sim.resolution
         
-    #@profile
+    
     def load_txt_dat(self):
         import pandas as pd
         self.data = pd.read_csv(self.txt_file, sep=r'\s+')  # Fixed regex warning
@@ -1978,7 +1978,7 @@ class FeedHorn(object):
         return self.data
     
     
-    #@profile
+    
     def fit_spline_to_dat(self, s_factor=0, no_points=1000):
         from scipy.interpolate import UnivariateSpline
         r_pos_spline = UnivariateSpline(self.cumulative_z, self.data['r_pos'], s=s_factor) 
@@ -2004,7 +2004,7 @@ class FeedHorn(object):
         return r_pos_spline, r_neg_spline
 
 
-    #@profile
+    
     def create_coordinate_grids(self):
         """Create x, y coordinate arrays for the grid"""
         # Match the epsilon map dimensions which have +1
@@ -2012,7 +2012,7 @@ class FeedHorn(object):
         self.y = np.linspace(-self.sy/2, self.sy/2, int(self.sy * self.res) + 1)
         return self.x, self.y
 
-    #@profile
+    
     def define_focal_plane_axis(self):
         """Create the focal plane axis array"""
         self.focal_plane_axis = np.linspace(
@@ -2022,7 +2022,7 @@ class FeedHorn(object):
         )
         return self.focal_plane_axis
 
-    # #@profile
+    # 
     # def fill_pec_region(self):
     #     """Fill the focal plane region with PEC - VECTORIZED"""
     #     x, y = self.create_coordinate_grids()
@@ -2041,7 +2041,7 @@ class FeedHorn(object):
     #     self.eps[mask_pec] = self.eps_pec
 
 
-    #@profile
+    
     def fill_pec_region(self):
         """Fill the focal plane region with PEC - CHUNKED"""
         x, y = self.create_coordinate_grids()
@@ -2068,7 +2068,7 @@ class FeedHorn(object):
             # Free memory
             del X_chunk, Y_chunk, mask_pec_chunk
 
-    #@profile
+    
     def calculate_feedhorn_centers(self):
         """Calculate feedhorn center positions"""
         n_feedhorns_positive = int(np.floor(self.feedhorn_y_range[1] / self.t_f)) + 1
@@ -2085,7 +2085,7 @@ class FeedHorn(object):
         
         return self.feedhorn_centers
 
-    #@profile
+    
     def fill_feedhorn_profiles(self, r_pos_spline, r_neg_spline):
         """Fill air inside feedhorns using spline functions - CHUNKED"""
         x, y = self.create_coordinate_grids()
@@ -2146,7 +2146,7 @@ class FeedHorn(object):
             del X_chunk, Y_chunk, z_pos_chunk, mask_x_chunk, mask_z_chunk
             del mask_region_chunk, z_pos_valid, r_upper_valid, r_lower_valid
 
-    #@profile
+    
     def plot_focal_plane(self):
         """Plot the simulation grid with focal plane axis"""
         if not self.plot:
@@ -2171,7 +2171,7 @@ class FeedHorn(object):
         plt.savefig(self.savepath + 'step3_focal_plane_plot.png')
         plt.close()
 
-    #@profile
+    
     def plot_pec_region(self):
         """Plot the simulation grid with PEC region filled"""
         if not self.plot:
@@ -2194,7 +2194,7 @@ class FeedHorn(object):
         plt.savefig(self.savepath + 'step3b_focal_plane_with_PEC.png')
         plt.close()
 
-    #@profile
+    
     def plot_feedhorn_centers(self):
         """Plot feedhorn centers on the focal plane"""
         if not self.plot:
@@ -2224,7 +2224,7 @@ class FeedHorn(object):
         plt.savefig(self.savepath + 'step4_focal_plane_with_feedhorns_plot.png')
         plt.close()
 
-    #@profile
+    
     def plot_final_geometry(self):
         """Plot the final feedhorn geometry with all profiles filled"""
         if not self.plot:
@@ -2243,7 +2243,7 @@ class FeedHorn(object):
         plt.savefig(self.savepath + 'step5_feedhorns_with_profiles.png')
         plt.close()
 
-    #@profile
+    
     def add_absorbers_to_extra_PEC(self):
         # # Calculate the remaining length remaining on the PEC layer in the focal plane
         # extra_layer_negative_side = self.focal_plane_y_range[0] - self.feedhorn_y_range[0]
@@ -2279,7 +2279,7 @@ class FeedHorn(object):
         #                                 )
         pass
 
-    #@profile
+    
     def assemble(self):
         """Assemble the complete feedhorn geometry"""
         # Load and fit data
@@ -2311,3 +2311,982 @@ class FeedHorn(object):
         self.plot_final_geometry()
         
         return self.eps
+    
+# ----------------------------------- Polyexponential Mirror ----------------------------------- #
+class Mirror(object):
+    """
+    One extended-polynomial mirror, from ZEMAX prescription into an epsilon map.
+
+    The tilt is the CUMULATIVE rotation about the ZEMAX x-axis. Basically its 
+    the sum of the tilt_x of every coordinate break preceding the surface, with the
+    prescription's own sign. Use from_prescription() to have it taken from the
+    surface table rather than typed in, so it cannot drift away from the centre
+    computed from that same table.
+
+    Attributes
+    ----------
+    permittivity_map : ndarray
+        The epsilon map this mirror edits, indexed [x, y]. It is the same epsilon map
+        shared with every other component in the simulation.
+    res, dpml, size_x, size_y : float
+        Cell geometry, from mpsat_sim when given. size_x/size_y exclude PML.
+    origin_offset_mm : tuple
+        Shared ZEMAX -> MEEP offset (see zemax_placement)
+    centre_zemax_mm : tuple
+        (y, z) surface centre in the global ZEMAX frame
+    half_width_mm : float
+        Half-width along the mirror's local y
+    A_ij : ndarray
+        Extended polynomial coefficients, A_ij[i][j] multiplying x^i y^j
+    R_N, N : float, int
+        Normalisation radius (mm) and polynomial degree
+    ap_y : float
+        Aperture decentre along local y (mm)
+    tilt_deg : float
+        Cumulative rotation about the ZEMAX x-axis (degrees)
+    thickness_mm : float
+        Body thickness, measured along the surface normal
+    eps_value : float
+        Permittivity written into the body
+    optical_side_zemax_mm : tuple or None
+        (y, z) of what this mirror reflects towards -- normally the next
+        surface's centre. The material goes on the opposite side, so the
+        reflecting face sits exactly on the prescription surface.
+    """
+
+    def __init__(self, eps, name, centre_zemax_mm, half_width_mm, A_ij, R_N,
+                 N=7, ap_y=0.0, tilt_deg=0.0, thickness_mm=15.0, eps_value=12.0,
+                 optical_side_zemax_mm=None, invert_sag=False,
+                 samples_per_mm=10.0, origin_offset_mm=(0.0, 0.0),
+                 mpsat_sim=None, size_x=None, size_y=None, resolution=None,
+                 dpml=0.0):
+        self.permittivity_map = eps   # ~ THIS IS THE EPSILON MAP (not ours)
+
+        # Cell geometry: from the simulation object if there is one, exactly as
+        # AsphericLens does it, otherwise from explicit arguments.
+        if mpsat_sim is not None:
+            self.res = mpsat_sim.resolution
+            self.dpml = mpsat_sim.factor_dpml * mpsat_sim.dpml
+            # 2 times because there's pml on both sides
+            self.size_x = mpsat_sim.cell_size[0] - 2 * self.dpml
+            self.size_y = mpsat_sim.cell_size[1] - 2 * self.dpml
+        else:
+            if size_x is None or size_y is None or resolution is None:
+                raise ValueError('give either mpsat_sim, or all of size_x, '
+                                 'size_y and resolution')
+            self.res = float(resolution)
+            self.dpml = float(dpml)
+            self.size_x = float(size_x)
+            self.size_y = float(size_y)
+        self.mpsat_sim = mpsat_sim
+
+        self.name = name
+        self.centre_zemax_mm = (float(centre_zemax_mm[0]), float(centre_zemax_mm[1]))
+        self.half_width_mm = float(half_width_mm)
+        self.A_ij = np.asarray(A_ij, dtype=float)
+        self.R_N = float(R_N)
+        self.N = int(N)
+        self.ap_y = float(ap_y)
+        self.tilt_deg = float(tilt_deg)
+        self.thickness_mm = float(thickness_mm)
+        self.eps_value = float(eps_value)
+        self.optical_side_zemax_mm = optical_side_zemax_mm
+        self.invert_sag = bool(invert_sag)
+        self.samples_per_mm = float(samples_per_mm)
+        self.origin_offset_mm = (float(origin_offset_mm[0]),
+                                 float(origin_offset_mm[1]))
+
+        self._profile_zemax = None
+
+    # --- helper ------------------------------------------------------
+    # Defining a bunch of static methods (independent of the class methods) 
+    # to help with the polynomial geometry of the mirror surface.
+    
+    @staticmethod
+    def _ensure_dir(path):
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+                
+    @staticmethod
+    def extended_polynomial_terms(N=7):
+        """
+        ZEMAX Extended Polynomial parameter order, as term names.
+
+        ZEMAX lists the coefficients by ascending total order, and within each
+        total order s = i + j it goes x^s, x^(s-1)*y, ..., y^s:
+
+            x1y0  x0y1  x2y0  x1y1  x0y2  x3y0  x2y1  x1y2  x0y3  ...
+
+        Args:
+            N: Degree of the polynomial (int)
+
+        Returns:
+            List of term names, in the order ZEMAX/Excel writes them
+        """
+        return [f'x{i}y{s - i}' for s in range(1, N + 1) for i in range(s, -1, -1)]
+
+    @staticmethod
+    def excel_to_aij(excel_values, N=7):
+        """
+        Convert a flat Excel/ZEMAX coefficient row to a 2D A_ij array.
+
+        A_ij[i][j] multiplies x^i * y^j, and the input is read in the order given by
+        extended_polynomial_terms(). Note the inner loop counts i *down* from s: the
+        x^s term of each diagonal comes first, so counting i up would transpose the
+        surface (the x-coefficients would be used as the y-coefficients).
+
+        Args:
+            excel_values: List of coefficients from Excel (35 values for N=7)
+            N: Polynomial degree (default 7)
+
+        Returns:
+            (N+1) x (N+1) numpy array
+        """
+        A_ij = np.zeros((N + 1, N + 1))
+        idx = 0
+
+        # Iterate through diagonals (constant i+j sum)
+        for s in range(1, N + 1):  # s = i + j, starting from 1 (skip x0y0)
+            for i in range(s, -1, -1):
+                j = s - i
+                if j <= N:
+                    A_ij[i][j] = excel_values[idx]
+                    idx += 1
+
+        return A_ij    
+
+    @classmethod 
+    def check_aij_ordering(cls, excel_values, A_ij, N=7, label=''):
+        """
+        Assert that A_ij holds every Excel coefficient at the index its name implies.
+
+        Guards the one bug excel_to_aij can silently reintroduce: filling each
+        i+j diagonal in the wrong direction, which swaps x and y.
+
+        Args:
+            excel_values: The flat coefficient row that produced A_ij
+            A_ij: Output of excel_to_aij
+            N: Polynomial degree
+            label: Name used in the failure message (e.g. 'M1')
+        """
+        for k, name in enumerate(cls.extended_polynomial_terms(N)):
+            i, j = int(name[1]), int(name[3])
+            if A_ij[i][j] != excel_values[k]:
+                raise AssertionError(
+                    f'{label} A_ij ordering is wrong: Excel term {k} ({name}) = '
+                    f'{excel_values[k]} but A_ij[{i}][{j}] = {A_ij[i][j]}')
+
+
+    @staticmethod
+    def compute_surface_centers(surfaces):
+        """
+        Compute the 3D centers of optical surfaces in a global coordinate system.
+        
+        This function processes a sequence of optical surfaces, tracking cumulative
+        coordinate transformations (decenters and tilts) to compute the center position
+        of each real surface in the global frame. It handles COORDBRK surfaces that
+        define coordinate system changes and thickness offsets between surfaces.
+        
+        Parameters
+        ----------
+        surfaces : list of dict
+            A list of surface dictionaries, where each dict can contain:
+            - "type" (str): Surface type, either "COORDBRK" or a real surface type
+            - "decenter_x" (float, optional): X-axis decentering in current frame (default: 0.0)
+            - "decenter_y" (float, optional): Y-axis decentering in current frame (default: 0.0)
+            - "tilt_x" (float, optional): Rotation about X-axis in degrees (default: 0.0)
+            - "tilt_y" (float, optional): Rotation about Y-axis in degrees (default: 0.0)
+            - "tilt_z" (float, optional): Rotation about Z-axis in degrees (default: 0.0)
+            - "ap_x" (float, optional): Aperture X offset of surface center (default: 0.0)
+            - "ap_y" (float, optional): Aperture Y offset of surface center (default: 0.0)
+            - "thickness" (float, optional): Distance to next surface along Z-axis (default: 0.0)
+        
+        Returns
+        -------
+        list of tuple
+            A list of tuples (index, center)
+        """
+
+        # Global state
+        R_global = np.eye(3)
+        p_global = np.zeros(3)
+
+        centers = []
+
+        for i, s in enumerate(surfaces):
+
+            # --- 1. Apply COORDBRK ---
+            if s["type"] == "COORDBRK":
+                dx = s.get("decenter_x", 0.0)
+                dy = s.get("decenter_y", 0.0)
+
+                tx = np.deg2rad(s.get("tilt_x", 0.0))
+                ty = np.deg2rad(s.get("tilt_y", 0.0))
+                tz = np.deg2rad(s.get("tilt_z", 0.0))
+
+                # Translation in current frame
+                p_global = p_global + R_global @ np.array([dx, dy, 0.0])
+
+                # Rotation update
+                R_local = exf.rotation_matrix(tx, ty, tz)
+                R_global = R_global @ R_local
+
+            # --- 2. If real surface, compute center ---
+            if s["type"] != "COORDBRK":
+                apx = s.get("ap_x", 0.0)
+                apy = s.get("ap_y", 0.0)
+
+                center = p_global + R_global @ np.array([apx, apy, 0.0])
+                centers.append((i, center))
+
+            # --- 3. Apply thickness (always happens) ---
+            t = s.get("thickness", 0.0)
+            p_global = p_global + R_global @ np.array([0.0, 0.0, t])
+
+        return centers
+
+
+    @staticmethod
+    def cumulative_tilts_x(surfaces):
+        """
+        Cumulative rotation about the X-axis at each real (non-COORDBRK) surface.
+
+        This is the angle mirror_profile_mm() needs, taken straight from the
+        prescription so its sign can never drift away from the surface centers
+        computed by compute_surface_centers().
+
+        Parameters
+        ----------
+        surfaces : list of dict
+            Same surface list given to compute_surface_centers()
+
+        Returns
+        -------
+        list of tuple
+            A list of tuples (index, cumulative tilt_x in degrees)
+        """
+        tilt = 0.0
+        tilts = []
+
+        for i, s in enumerate(surfaces):
+            if s["type"] == "COORDBRK":
+                tilt += s.get("tilt_x", 0.0)
+            else:
+                tilts.append((i, tilt))
+
+        return tilts
+
+    @staticmethod
+    def zemax_to_meep_mm(y_mm, z_mm):
+        """
+        The one and only ZEMAX -> MEEP axis convention. Still in mm.
+
+        ZEMAX y becomes the MEEP x axis (the first array index, matching
+        meepsat.components_2D_eps, which indexes its maps eps_map[x, y]).
+
+        ZEMAX z is NEGATED to become the MEEP y axis. In the prescription light
+        travels along +z, from the object surface at z = 0 up to the primary at
+        z = 714, so without the flip the telescope is drawn upside down. Negating z
+        puts the sky at the top of the map, the primary reflector at the bottom, the
+        secondary at the left and the focal plane at the right -- the layout of
+        Fig. 3 of the LFT MCD paper. Light then travels DOWN the map, off the
+        primary, up and to the left onto the secondary, then right to the focal
+        plane.
+
+        Apply this once, to profiles and centres alike. Flipping z here while
+        leaving the tilt signs in the unflipped frame (or vice versa) mirror-images
+        each surface about the horizontal axis through its own centre, which is
+        exactly how the mirrors ended up splayed apart and crossing.
+
+        Args:
+            y_mm, z_mm: Global ZEMAX coordinates (float or array)
+
+        Returns:
+            (x_meep_mm, y_meep_mm)
+        """
+        return np.asarray(y_mm, dtype=float), -np.asarray(z_mm, dtype=float)
+
+    @staticmethod
+    def centred_cell(x_mm, y_mm, margin_mm):
+        """
+        Smallest MEEP cell that holds the given points, centred on them.
+
+        MEEP puts the origin at the middle of the cell, so once everything has been
+        shifted by the returned centre the cell runs from -size/2 to +size/2 on both
+        axes and origin_mm for meep_mm_to_pixel() is simply (-size_x/2, -size_y/2).
+
+        Args:
+            x_mm, y_mm: Every point the cell has to contain (MEEP mm)
+            margin_mm: Clearance to leave around them, before any PML
+
+        Returns:
+            (size_x, size_y, centre_mm): Cell size in mm and the centre the points
+            must be shifted by
+        """
+        x_mm = np.asarray(x_mm, dtype=float)
+        y_mm = np.asarray(y_mm, dtype=float)
+
+        centre_mm = (0.5 * (x_mm.min() + x_mm.max()),
+                    0.5 * (y_mm.min() + y_mm.max()))
+        size_x = float(np.ceil(x_mm.max() - x_mm.min() + 2 * margin_mm))
+        size_y = float(np.ceil(y_mm.max() - y_mm.min() + 2 * margin_mm))
+
+        return size_x, size_y, centre_mm
+
+    @staticmethod
+    def meep_mm_to_pixel(x_mm, y_mm, origin_mm, resolution):
+        """
+        The one and only mm -> pixel map for the epsilon array.
+
+        Args:
+            x_mm, y_mm: MEEP coordinates in mm (see zemax_to_meep_mm). With the
+                optics recentred via centred_cell() these are MEEP's own centred
+                coordinates, running from -size/2 to +size/2.
+            origin_mm: (x, y) of pixel (0, 0), i.e. the lower-left corner of the
+                map -- (-size_x/2, -size_y/2) for a centred cell
+            resolution: Pixels per mm
+
+        Returns:
+            (ix, iy): Float pixel indices into eps_map[x, y]
+        """
+        ix = (np.asarray(x_mm, dtype=float) - origin_mm[0]) * resolution
+        iy = (np.asarray(y_mm, dtype=float) - origin_mm[1]) * resolution
+        return ix, iy
+
+    @staticmethod
+    def polyexp(x, y, A_ij, R_N, N):
+        """
+        Evaluate the extended polynomial surface equation.
+
+        The result is in the same length unit as the A_ij coefficients (mm), whatever
+        unit x, y and R_N are in -- x/R_N and y/R_N are dimensionless. Scaling x, y
+        and R_N into pixels therefore does NOT give a sag in pixels.
+
+        Args:
+            x: X-coordinate (float or array)
+            y: Y-coordinate (float or array)
+            A_ij: Coefficients of the polynomial (2D array)
+            R_N: Normalization radius (float)
+            N: Degree of the polynomial (int)
+
+        Returns:
+            Z-coordinate (sag) on the surface, in mm
+        """
+        z = 0.0
+        for i in range(N + 1):
+            for j in range(N + 1 - i):
+                z = z + A_ij[i][j] * (x / R_N) ** i * (y / R_N) ** j
+        return z
+
+    @staticmethod
+    def profile_normals(u_mm, v_mm):
+        """
+        Unit normals along a sampled profile.
+
+        Args:
+            u_mm, v_mm: Profile coordinates, in whichever 2D frame the caller uses
+
+        Returns:
+            (n_u, n_v): Arrays of unit normal components
+        """
+        t_u = np.gradient(u_mm)
+        t_v = np.gradient(v_mm)
+        norm = np.hypot(t_u, t_v)
+        norm[norm == 0] = 1.0
+        return -t_v / norm, t_u / norm
+
+    @classmethod
+    def mirror_profile_mm(cls, center_mm, half_width_mm, A_ij, R_N, N,
+                        ap_y=0.0, tilt_deg=0.0, invert_sag=False,
+                        samples_per_mm=2.0):
+        """
+        2D (YZ) profile of an extended polynomial mirror, in the global ZEMAX frame.
+
+        Everything is in mm. This is the only place a mirror profile is built --
+        pixels are introduced later, by rasterize_profile().
+
+        Args:
+            center_mm: (y, z) surface centre in global ZEMAX coordinates
+            half_width_mm: Half-width of the mirror along local y
+            A_ij: Coefficients of the polynomial (2D array)
+            R_N: Normalization radius (mm)
+            N: Degree of the polynomial (int)
+            ap_y: Aperture decentering along local y (mm)
+            tilt_deg: CUMULATIVE rotation about the ZEMAX x-axis, i.e. the sum of
+                the tilt_x values of every coordinate break preceding the surface.
+                Use the prescription's own signs -- flipping them mirrors the
+                surface about the horizontal axis through its own centre.
+            invert_sag: Whether to invert the sag (concave vs convex)
+            samples_per_mm: Sampling density along the local y axis. Use at least
+                2 * resolution so consecutive samples land on adjacent pixels.
+
+        Returns:
+            (y_mm, z_mm): Arrays of global ZEMAX coordinates along the profile
+        """
+        n_points = max(int(np.ceil(2 * half_width_mm * samples_per_mm)), 2)
+        y_local = np.linspace(-half_width_mm, half_width_mm, n_points)
+
+        #! Evaluate polynomial at aperture-decentered position
+        z_sag = cls.polyexp(0.0, y_local - ap_y, A_ij, R_N, N)
+
+        if invert_sag:
+            z_sag = -z_sag
+
+        theta = np.radians(tilt_deg)
+        cos_t, sin_t = np.cos(theta), np.sin(theta)
+
+        # Rotate about the ZEMAX x-axis, then translate to the global centre
+        y_mm = y_local * cos_t - z_sag * sin_t + center_mm[0]
+        z_mm = y_local * sin_t + z_sag * cos_t + center_mm[1]
+
+        return y_mm, z_mm
+
+    @classmethod
+    def offset_profile(cls, x_mm, y_mm, thickness_mm, optical_side_mm):
+        """
+        Back face of a mirror body, offset along the surface normal.
+
+        The material goes on the side facing AWAY from optical_side_mm, so the
+        reflecting face stays exactly on the prescription surface. One global sign
+        is taken at the middle of the profile, so curvature cannot flip the material
+        from one side of the mirror to the other partway along.
+
+        Args:
+            x_mm, y_mm: Reflecting-face profile in MEEP coordinates (mm)
+            thickness_mm: Body thickness along the surface normal
+            optical_side_mm: (x, y) of what this mirror reflects towards
+
+        Returns:
+            (x_back, y_back, n_x, n_y): The back face, and the unit normal pointing
+            into the material
+        """
+        n_x, n_y = cls.profile_normals(x_mm, y_mm)
+
+        mid = len(x_mm) // 2
+        to_optical_side = np.array([optical_side_mm[0] - x_mm[mid],
+                                    optical_side_mm[1] - y_mm[mid]])
+        if np.dot(to_optical_side, np.array([n_x[mid], n_y[mid]])) > 0:
+            n_x, n_y = -n_x, -n_y  # normals now point into the material
+
+        return x_mm + thickness_mm * n_x, y_mm + thickness_mm * n_y, n_x, n_y
+    
+    # --- For cell placement and sizing ------------------------------------------------------
+    @classmethod
+    def zemax_placement(cls, mirrors, extra_zemax_points=(), margin_mm=0.0):
+        """
+        The shared ZEMAX -> MEEP offset for one prescription, and the cell it needs.
+
+        Apply the SAME offset to every Mirror of the prescription. The returned cell
+        size is advisory: standalone it tells you what to allocate, but inside
+        MeepSAT the cell comes from mpsat_sim.cell_size and only the offset is used.
+
+        Args:
+            mirrors: Iterable of Mirror objects (only their ZEMAX profiles are read,
+                so the offset they currently carry does not matter)
+            extra_zemax_points: Further (y, z) ZEMAX points that must fit, e.g. the
+                focal plane and the object/sky surface
+            margin_mm: Clearance to leave around the optics, before any PML
+
+        Returns:
+            (offset_mm, size_x, size_y)
+        """
+        xs, ys = [], []
+
+        for mirror in mirrors:
+            x_mm, y_mm = cls.zemax_to_meep_mm(*mirror.profile_zemax)
+            xs.append(np.atleast_1d(x_mm))
+            ys.append(np.atleast_1d(y_mm))
+
+        for point in extra_zemax_points:
+            x_mm, y_mm = cls.zemax_to_meep_mm(*point)
+            xs.append(np.atleast_1d(x_mm))
+            ys.append(np.atleast_1d(y_mm))
+
+        x_all = np.concatenate(xs)
+        y_all = np.concatenate(ys)
+
+        size_x, size_y, offset_mm = cls.centred_cell(x_all, y_all, margin_mm)
+        return offset_mm, size_x, size_y
+    
+    
+    # --- For mirror construction ------------------------------------------------------
+    @classmethod
+    def from_excel(cls, eps, name, centre_zemax_mm, half_width_mm, excel_values,
+                   R_N, N=7, **kwargs):
+        """
+        Build from a flat ZEMAX/Excel coefficient row.
+
+        The row is checked against the Extended Polynomial term order, so a
+        transposed A_ij (x-coefficients used as y-coefficients) raises here
+        rather than quietly reshaping the mirror.
+        """
+        A_ij = cls.excel_to_aij(excel_values, N=N)
+        cls.check_aij_ordering(excel_values, A_ij, N=N, label=name)
+        return cls(eps, name, centre_zemax_mm, half_width_mm, A_ij, R_N, N=N,
+                   **kwargs)
+   
+    @classmethod
+    def from_prescription(cls, eps, name, surfaces, surface_index,
+                          half_width_mm, excel_values, R_N, N=7, **kwargs):
+        """
+        Build from a ZEMAX surface table, taking centre and tilt from it.
+
+        Args:
+            eps: The epsilon map to edit
+            surfaces: The surface list (see design_class.compute_surface_centers)
+            surface_index: Index of this mirror's surface in that list
+            half_width_mm, excel_values, R_N, N: As for from_excel()
+            **kwargs: Passed on to __init__ (ap_y, thickness_mm, mpsat_sim, ...);
+                tilt_deg is taken from the table and must not be given here
+        """
+        if 'tilt_deg' in kwargs:
+            raise TypeError('tilt_deg comes from the prescription; drop it or '
+                            'use Mirror.from_excel() instead')
+
+        centres = dict(cls.compute_surface_centers(surfaces))
+        tilts = dict(cls.cumulative_tilts_x(surfaces))
+
+        if surface_index not in centres:
+            raise KeyError(f'surface {surface_index} is not a real surface in '
+                           f'this prescription (real surfaces: {sorted(centres)})')
+
+        centre = centres[surface_index]
+        return cls.from_excel(eps, name, (centre[1], centre[2]), half_width_mm,
+                              excel_values, R_N, N=N,
+                              tilt_deg=tilts[surface_index], **kwargs)
+        
+    # --- the cell this mirror lives in --------------------------------------------------
+    @property
+    def map_shape(self):
+        """(nx, ny) the permittivity map should have for this cell."""
+        return (int((self.size_x + 2 * self.dpml) * self.res) + 1,
+                int((self.size_y + 2 * self.dpml) * self.res) + 1)
+
+    @property
+    def origin_mm(self):
+        """(x, y) of pixel (0, 0): the lower-left corner, in centred coords."""
+        return (-(self.size_x / 2 + self.dpml), -(self.size_y / 2 + self.dpml))
+
+    @property
+    def extent(self):
+        """[xmin, xmax, ymin, ymax] in mm, for imshow(..., extent=...)."""
+        half_x = self.size_x / 2 + self.dpml
+        half_y = self.size_y / 2 + self.dpml
+        return [-half_x, half_x, -half_y, half_y]
+
+    # --- frame conversions (ZEMAX TO MEEPSAT and vice versa) -------------------------------------------------
+    def from_zemax(self, y_mm, z_mm):
+        """
+        ZEMAX (y, z) mm -> MEEP centred (x, y) mm.
+
+        The z-flip (sky at the top, primary at the bottom) and the shared
+        origin_offset_mm, in that order.
+        """
+        x, y = self.zemax_to_meep_mm(y_mm, z_mm)
+        return x - self.origin_offset_mm[0], y - self.origin_offset_mm[1]
+
+    def to_zemax(self, x_mm, y_mm):
+        """MEEP centred (x, y) mm -> ZEMAX (y, z) mm. The inverse of from_zemax."""
+        x = np.asarray(x_mm, dtype=float) + self.origin_offset_mm[0]
+        y = np.asarray(y_mm, dtype=float) + self.origin_offset_mm[1]
+        return x, -y
+
+    def to_pixel(self, x_mm, y_mm):
+        """MEEP centred (x, y) mm -> float indices into permittivity_map[x, y]."""
+        return self.meep_mm_to_pixel(x_mm, y_mm, self.origin_mm, self.res)
+
+    # --- Now for creating the geometry ----------------------------------------------------------
+    @property
+    def profile_zemax(self):
+        """(y_mm, z_mm) of the reflecting face in the global ZEMAX frame."""
+        if self._profile_zemax is None:
+            self._profile_zemax = self.mirror_profile_mm(
+                center_mm=self.centre_zemax_mm,
+                half_width_mm=self.half_width_mm,
+                A_ij=self.A_ij, R_N=self.R_N, N=self.N,
+                ap_y=self.ap_y, tilt_deg=self.tilt_deg,
+                invert_sag=self.invert_sag,
+                samples_per_mm=self.samples_per_mm)
+        return self._profile_zemax
+    
+    @property
+    def profile_meep(self):
+        """(x_mm, y_mm) of the reflecting face in MEEP centred coordinates."""
+        return self.from_zemax(*self.profile_zemax)
+
+    @property
+    def centre_meep(self):
+        """The surface centre in MEEP centred coordinates."""
+        return self.from_zemax(*self.centre_zemax_mm)
+
+    @property
+    def back_face_meep(self):
+        """
+        (x_mm, y_mm) of the mirror's back face in MEEP centred coordinates.
+
+        Shares design_class.offset_profile() with the rasteriser, so what gets
+        plotted is the same surface that gets written into the epsilon map.
+        """
+        self._require_optical_side()
+        x_mm, y_mm = self.profile_meep
+        optical_side = self.from_zemax(*self.optical_side_zemax_mm)
+        x_back, y_back, _, _ = self.offset_profile(x_mm, y_mm, self.thickness_mm, 
+                                                 optical_side)
+        return x_back, y_back
+    
+    @property
+    def arc_length_mm(self):
+        """Length of the reflecting face along the surface."""
+        y_mm, z_mm = self.profile_zemax
+        return float(np.sum(np.hypot(np.diff(y_mm), np.diff(z_mm))))
+    
+    @property
+    def sag_mm(self):
+        """Peak-to-valley of the profile, measured perpendicular to its chord."""
+        y_mm, z_mm = self.profile_zemax
+        chord = np.array([y_mm[-1] - y_mm[0], z_mm[-1] - z_mm[0]])
+        chord = chord / np.linalg.norm(chord)
+        normal = np.array([-chord[1], chord[0]])
+        dev = (y_mm - y_mm[0]) * normal[0] + (z_mm - z_mm[0]) * normal[1]
+        return float(dev.max() - dev.min())
+    
+    def _require_optical_side(self):
+        if self.optical_side_zemax_mm is None:
+            raise ValueError(
+                f'{self.name} has no optical_side_zemax_mm, so the material '
+                f'side is undefined -- set it to whatever this mirror reflects '
+                f'towards (normally the next surface centre)')
+            
+    # --- writing the mirror into the map ----------------------------------------------
+    def rasterize_profile(self, eps_map, x_mm, y_mm, origin_mm, resolution,
+                        thickness_mm, optical_side_mm, eps_value=12.0):
+        """
+        Write a solid mirror body into eps_map[x, y].
+
+        Works entirely in the MEEP frame -- pass profiles that have already been
+        through zemax_to_meep_mm(), so the z-flip is applied once, upstream, to
+        profiles and centres alike.
+
+        The reflecting face sits exactly on (x_mm, y_mm) and thickness_mm of
+        material is added on the side facing AWAY from optical_side_mm, so the
+        surface the beam sees is the one the prescription describes. Thickness is
+        measured along the surface normal rather than down a grid axis, so a steeply
+        tilted mirror gets the same body as a shallow one.
+
+        The body is filled by stepping from the front face to the back face along
+        the normal at every sample, on a lattice fine enough (half a pixel in both
+        directions) that the rounded pixel set is contiguous -- no combing, however
+        the profile is sampled. A single skimage polygon() over the whole outline
+        would be correct too, but it costs O(bounding box x vertices), which for a
+        mirror this size is billions of point-in-polygon tests.
+
+        Args:
+            eps_map: 2D array indexed [x, y], modified in place
+            x_mm, y_mm: Reflecting-face profile in MEEP coordinates (mm)
+            origin_mm: (x, y) of pixel (0, 0)
+            resolution: Pixels per mm
+            thickness_mm: Mirror thickness along the surface normal
+            optical_side_mm: (x, y) of a point on the optical side of this mirror,
+                i.e. what it has to reflect towards -- normally the other mirror's
+                centre, in the same MEEP frame. The material goes on the opposite
+                side.
+            eps_value: Permittivity written into the body
+
+        Returns:
+            dict with 'rows'/'cols' (the pixels filled), 'x_back'/'y_back' (the
+            back-face profile in mm) and 'normal' (the unit normal pointing into
+            the material)
+        """
+        x_back, y_back, n_x, n_y = self.offset_profile(x_mm, y_mm, thickness_mm,
+                                                optical_side_mm)
+
+        # Half-pixel steps from the front face to the back face
+        n_steps = int(np.ceil(2.0 * thickness_mm * resolution)) + 1
+        depth = np.linspace(0.0, thickness_mm, n_steps)[:, None]
+
+        x_body = x_mm[None, :] + depth * n_x[None, :]
+        y_body = y_mm[None, :] + depth * n_y[None, :]
+
+        ix, iy = self.meep_mm_to_pixel(x_body.ravel(), y_body.ravel(), origin_mm, resolution)
+        rows = np.rint(ix).astype(np.intp)
+        cols = np.rint(iy).astype(np.intp)
+
+        inside = ((rows >= 0) & (rows < eps_map.shape[0]) &
+                (cols >= 0) & (cols < eps_map.shape[1]))
+        rows, cols = rows[inside], cols[inside]
+
+        eps_map[rows, cols] = eps_value
+
+        # Deduplicate so the caller counts pixels, not samples
+        flat = np.unique(rows.astype(np.int64) * eps_map.shape[1] + cols)
+        rows, cols = np.divmod(flat, eps_map.shape[1])
+
+        return {'rows': rows.astype(np.intp), 'cols': cols.astype(np.intp),
+                'x_back': x_back, 'y_back': y_back,
+                'normal': (n_x, n_y),
+                'clipped': int((~inside).sum())}
+
+    def write_mirror(self, eps_map=None):
+        """
+        Write this mirror's body into the epsilon map, in place.
+
+        Args:
+            eps_map: The map to edit; defaults to the one this Mirror was given
+
+        Returns:
+            The body dict from design_class.rasterize_profile ('rows', 'cols',
+            'x_back', 'y_back', 'normal', 'clipped')
+        """
+        self._require_optical_side()
+
+        if eps_map is None:
+            eps_map = self.permittivity_map
+        if eps_map is None:
+            raise ValueError(f'{self.name} has no epsilon map to write into')
+
+        x_mm, y_mm = self.profile_meep
+        optical_side = self.from_zemax(*self.optical_side_zemax_mm)
+
+        return self.rasterize_profile(
+            eps_map, x_mm, y_mm, self.origin_mm, self.res,
+            thickness_mm=self.thickness_mm,
+            optical_side_mm=optical_side,
+            eps_value=self.eps_value)
+
+    @staticmethod
+    def assemble(mirrors, verbose=False):
+        """
+        Write all the mirror in the mirrors list into the epsilon map they share, and return it.
+
+        Args:
+            mirrors: Iterable of Mirror objects, all holding the same map
+            verbose: Print a line per mirror as it is written
+
+        Returns:
+            (eps_map, bodies): The shared map and a dict of name -> body dict
+        """
+        mirrors = list(mirrors)
+        if not mirrors:
+            raise ValueError('no mirrors to assemble')
+
+        eps_map = mirrors[0].permittivity_map
+        for mirror in mirrors[1:]:
+            if mirror.permittivity_map is not eps_map:
+                raise ValueError(
+                    f'{mirror.name} holds a different epsilon map from '
+                    f'{mirrors[0].name} -- every component must share one map')
+
+        bodies = {}
+        for mirror in mirrors:
+            body = mirror.write_mirror(eps_map)
+            bodies[mirror.name] = body
+            if verbose:
+                print(f'  {mirror.name}: arc {mirror.arc_length_mm:.1f} mm, '
+                      f'sag {mirror.sag_mm:.2f} mm, '
+                      f'{len(body["rows"])} px written'
+                      + (f', {body["clipped"]} samples clipped'
+                         if body['clipped'] else ''))
+
+        return eps_map, bodies
+
+    # --- writing the mirror as MEEP geometry (triangular mesh) -------------------------
+    def triangular_mesh(self, n_segments=200, plot=False, savepath=None):
+        """
+        Triangulate the mirror body, for meshing.convert_triangles_to_prisms().
+
+        Deliberately NOT meshing._create_triangular_mesh(): that one takes the
+        ConvexHull of the boundary, which is right for a pyramidal absorber but
+        wrong for a mirror. A curved mirror is concave on one side, so its hull
+        swallows the empty space between the chord and the reflecting face --
+        for the LiteBIRD LFT primary that is 59% phantom material.
+
+        Instead the mesh is built directly from the two faces this class already
+        computes. offset_profile() returns the back face sample-for-sample against
+        the front face, so front[i], front[i+1], back[i+1], back[i] is a quad for
+        every profile segment, and each quad splits into two triangles. The result
+        is an exact triangulation of the same body write_mirror() rasterises, with
+        no hull, no Delaunay and no interior sampling.
+
+        Coordinates come out in the corner-origin mm frame that
+        meshing.convert_triangles_to_prisms() expects (it subtracts grid_size/2
+        to recentre), NOT in the MEEP centred frame.
+
+        Args:
+            n_segments: Profile segments to mesh, i.e. 2 * n_segments triangles.
+                The profile is decimated to this many samples, which is what
+                controls the faceting error -- roughly L^2 / (8 R) for segment
+                length L and local radius of curvature R. The default is far
+                finer than one pixel for LFT-sized optics.
+            plot: Save a triplot of the mesh, via meshing._visualize_triangular_mesh
+            savepath: Where to write that plot; defaults to './<name>_triangular_mesh.png'
+
+        Returns:
+            matplotlib.tri.Triangulation
+        """
+        from matplotlib.tri import Triangulation
+        import meepsat.meshing as mesh
+
+        x_f, y_f = self.profile_meep
+        x_b, y_b = self.back_face_meep
+
+        # Decimate both faces with the SAME indices, so they stay paired
+        n_segments = max(int(n_segments), 1)
+        keep = np.unique(np.linspace(0, len(x_f) - 1,
+                                     min(n_segments + 1, len(x_f))).astype(int))
+        x_f, y_f = x_f[keep], y_f[keep]
+        x_b, y_b = x_b[keep], y_b[keep]
+        m = len(keep)
+
+        # meshing.convert_triangles_to_prisms() recentres by subtracting
+        # grid_size/2, so hand it corner-origin mm
+        x = np.r_[x_f, x_b] - self.origin_mm[0]
+        y = np.r_[y_f, y_b] - self.origin_mm[1]
+
+        i = np.arange(m - 1)
+        triangles = np.vstack([np.column_stack([i, i + 1, m + i]),
+                               np.column_stack([i + 1, m + i + 1, m + i])])
+
+        # Consistent counter-clockwise winding, as mp.Prism expects
+        v0, v1, v2 = (np.column_stack([x, y])[triangles[:, k]] for k in range(3))
+        cw = np.cross(v1 - v0, v2 - v0) < 0
+        triangles[cw] = triangles[cw][:, ::-1]
+
+        tri = Triangulation(x, y, triangles=triangles)
+
+        if plot:
+            mesh._visualize_triangular_mesh(
+                tri, self.size_x + 2 * self.dpml, self.size_y + 2 * self.dpml,
+                output_file=savepath or f'./{self.name}_triangular_mesh.png')
+
+        return tri
+
+    def to_prisms(self, material=None, n_segments=200, thickness=1.0,
+                  plot_mesh=False, savepath=None):
+        """
+        This mirror as a list of mp.Prism objects, for the MEEP geometry list.
+
+        The alternative to write_mirror(): instead of stamping pixels into the
+        shared epsilon map, the body is handed to MEEP as geometry, exactly as
+        meep_geometry.Absorbers does it. Use one or the other, not both -- MEEP
+        resolves geometry on top of epsilon_input_file, so doing both just writes
+        the same body twice.
+
+        Worth it when the mirror should be a perfect conductor: mp.metal cannot be
+        expressed as a permittivity, so PEC mirrors have to go down this route.
+
+        Args:
+            material: mp.Medium for the body; defaults to mp.Medium(epsilon=
+                self.eps_value). Pass mp.metal for a PEC mirror.
+            n_segments: Passed to triangular_mesh()
+            thickness: Prism height along z. Irrelevant in 2D, as for Absorbers.
+            plot_mesh, savepath: Passed to triangular_mesh()
+
+        Returns:
+            List of mp.Prism, one per triangle
+        """
+        import meepsat.meshing as mesh
+
+        tri = self.triangular_mesh(n_segments=n_segments, plot=plot_mesh,
+                                   savepath=savepath)
+
+        return mesh.convert_triangles_to_prisms(
+            tri=tri,
+            gridx_size_mm=self.size_x + 2 * self.dpml,
+            gridy_size_mm=self.size_y + 2 * self.dpml,
+            material=material or mp.Medium(epsilon=self.eps_value),
+            thickness=thickness)
+
+    @staticmethod
+    def assemble_prisms(mirrors, material=None, n_segments=200, verbose=False,
+                        plot_mesh=False, savepath=None):
+        """
+        to_prisms() over several mirrors, flattened into one geometry list.
+
+        Args:
+            mirrors: Iterable of Mirror objects
+            material: One mp.Medium for all of them, or a dict of name -> Medium
+            n_segments, plot_mesh, savepath: Passed through to to_prisms()
+            verbose: Print a line per mirror
+
+        Returns:
+            List of mp.Prism ready to extend mpsat_sim.meep_geometry
+        """
+        geometry = []
+        for mirror in mirrors:
+            mat = material.get(mirror.name) if isinstance(material, dict) else material
+            prisms = mirror.to_prisms(
+                material=mat, n_segments=n_segments, plot_mesh=plot_mesh,
+                savepath=(savepath + f'{mirror.name}_triangular_mesh.png'
+                          if savepath else None))
+            geometry.extend(prisms)
+            if verbose:
+                print(f'  {mirror.name}: arc {mirror.arc_length_mm:.1f} mm, '
+                      f'sag {mirror.sag_mm:.2f} mm, {len(prisms)} prisms')
+
+        return geometry
+
+    # --- Optional Plotting ----------------------------------------------------------
+    @classmethod
+    def plot_epsilon_map(cls, eps_map, mirrors, extra_zemax_points=None,
+                         savepath=None, show=False, title=None,
+                         mark_centre=True):
+        """
+        Plot an epsilon map in MEEP centred coordinates.
+
+        eps is stored [x, y], so it is transposed for imshow and given the cell's
+        extent -- the axes really are mm, not pixels.
+
+        Args:
+            eps_map: The map to draw
+            mirrors: Iterable of Mirror objects; the first sets the extent
+            extra_zemax_points: Optional dict of label -> (y, z) ZEMAX points
+            savepath, show, title, mark_centre: Figure handling
+        """
+        mirrors = list(mirrors)
+        ref = mirrors[0]
+
+        fig, ax = plt.subplots(figsize=(12, 10))
+        # .real because MeepSAT maps are complex when a component is lossy
+        im = ax.imshow(np.real(eps_map).T, extent=ref.extent, origin='lower',
+                       cmap='viridis', interpolation='nearest')
+
+        for mirror in mirrors:
+            cu, cv = mirror.centre_meep
+            ax.scatter(cu, cv, s=80, c='white', marker='x', zorder=5)
+            ax.text(cu, cv, f'  {mirror.name}', fontsize=11, color='white')
+
+        for label, point in (extra_zemax_points or {}).items():
+            pu, pv = ref.from_zemax(*point)
+            ax.scatter(pu, pv, s=80, c='white', marker='x', zorder=5)
+            ax.text(pu, pv, f'  {label}', fontsize=11, color='white')
+
+        if mark_centre:
+            ax.axhline(0, color='white', linewidth=0.6, alpha=0.4)
+            ax.axvline(0, color='white', linewidth=0.6, alpha=0.4)
+            ax.scatter(0, 0, s=90, c='white', marker='+', zorder=6)
+
+        plt.colorbar(im, ax=ax, label='Permittivity')
+        ax.set_xlabel('X MEEP (mm, centred on the cell)', fontsize=12)
+        ax.set_ylabel('Y MEEP (mm, centred on the cell)', fontsize=12)
+        ax.set_title(title or (f'Epsilon Map  ({ref.size_x:.0f} x '
+                               f'{ref.size_y:.0f} mm cell, {ref.res:g} px/mm)'),
+                     fontsize=14, fontweight='bold')
+        ax.set_aspect('equal')
+
+        plt.tight_layout()
+        if savepath:
+            cls._ensure_dir(savepath)
+            plt.savefig(savepath, dpi=150, bbox_inches='tight')
+        if show:
+            plt.show()
+        plt.close()
+
+    def __repr__(self):
+        return (f'Mirror({self.name!r}, centre_zemax_mm='
+                f'({self.centre_zemax_mm[0]:.2f}, {self.centre_zemax_mm[1]:.2f}), '
+                f'half_width_mm={self.half_width_mm:g}, '
+                f'tilt_deg={self.tilt_deg:+.2f}, '
+                f'map={"none" if self.permittivity_map is None else self.permittivity_map.shape})')
+
+    
