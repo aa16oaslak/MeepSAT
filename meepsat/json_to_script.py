@@ -396,18 +396,33 @@ def square_aperture(aperture_data, aperture_name):
     else:
         conductivity = aperture_data["conductivity"]
     
-    # Determine which position parameter to use
+    # Determine which position parameter(s) to use
     pos_x = aperture_data.get("pos_x", None)
     pos_y = aperture_data.get("pos_y", None)
-    
-    # Build position parameter string
-    if pos_x is not None:
-        pos_param = f"pos_x={pos_x}"
-    elif pos_y is not None:
-        pos_param = f"pos_y={pos_y}"
-    else:
+    orientation = aperture_data.get("orientation", None)
+
+    if pos_x is None and pos_y is None:
         raise ValueError(f"Aperture {aperture_name} must have either pos_x or pos_y defined")
-        
+
+    if pos_x is not None and pos_y is not None and orientation is None:
+        raise ValueError(f"Aperture {aperture_name} defines both pos_x and pos_y, "
+                         "so it must also define the orientation "
+                         "('vertical' or 'horizontal')")
+
+    # Build position parameter string (both positions can be given together)
+    pos_params = []
+    if pos_x is not None:
+        pos_params.append(f"pos_x={pos_x}")
+    if pos_y is not None:
+        pos_params.append(f"pos_y={pos_y}")
+    if orientation is not None:
+        pos_params.append(f"orientation='{orientation}'")
+    pos_param = ",\n                                       ".join(pos_params)
+
+    # Absorber layers on the faces of the stop, as a list of dicts that
+    # ApertureStop turns into ApertureAbsorberLayer objects
+    absorber_layers = aperture_data.get("absorber_layers", None)
+
     script = f"""
 #~ Adding Aperture: Square
 {aperture_name}_init = comp_meep.ApertureStop(mpsat_sim=mpsat_sim,
@@ -419,13 +434,24 @@ def square_aperture(aperture_data, aperture_name):
                                        conductivity={conductivity},
                                        material={aperture_data.get("material", "None")},
                                        y_centre_offset={aperture_data.get("y_centre_offset", [0, 0])},
-                                       y_size_offset={aperture_data.get("y_size_offset", [0, 0])}
+                                       y_size_offset={aperture_data.get("y_size_offset", [0, 0])},
+                                       print_vertices={aperture_data.get("print_vertices", False)},
+                                       absorber_layers={absorber_layers},
+                                       preserve_aperture={aperture_data.get("preserve_aperture", False)}
 )
 
 {aperture_name}_up, {aperture_name}_down = {aperture_name}_init.assemble()
 mpsat_sim.add_meep_geometry({aperture_name}_up)
 mpsat_sim.add_meep_geometry({aperture_name}_down)
 """
+
+    if absorber_layers:
+        script += f"""
+# Absorber layers on the faces of {aperture_name}
+{aperture_name}_absorbers = {aperture_name}_init.get_absorbers()
+mpsat_sim.meep_geometry.extend({aperture_name}_absorbers)
+"""
+
     return script
 
 def add_aperture(data):

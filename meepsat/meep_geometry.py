@@ -762,8 +762,133 @@ def meep_block(size,
                     **kwargs)
 
 
+def ensure_ccw_order(vertices):
+    """
+    Returns the vertices in counter-clockwise order, as mp.Prism expects
+
+    Parameters
+    ----------
+    vertices : list of mp.Vector3
+        Vertices of a planar polygon in the xy-plane
+
+    Returns
+    -------
+    list of mp.Vector3
+        The same vertices, reversed if they were clockwise
+    """
+    # Signed area from the shoelace formula: negative means clockwise
+    n = len(vertices)
+    area = 0
+    for i in range(n):
+        j = (i + 1) % n
+        area += vertices[i].x * vertices[j].y
+        area -= vertices[j].x * vertices[i].y
+
+    if area < 0:
+        return list(reversed(vertices))
+    return vertices
+
+
 
 #& APERTURE STOP
+
+
+@dataclass
+class ApertureAbsorberLayer:
+    """
+    Configuration for one absorber layer on a side of an aperture stop.
+
+    Layers are stacked outwards from the face they sit on, in the order they
+    are given, so a graded stack is just a list of layers on the same side.
+
+    Attributes
+    ----------
+    side : {'front', 'back', 'inner'}
+        Which face of the aperture stop blocks the layer sits on, in the
+        stop's own frame:
+        'front'  - the face the light arrives on (-x for a vertical stop,
+                   -y for a horizontal one)
+        'back'   - the opposite face
+        'inner'  - the aperture lip, i.e. the faces bordering the opening
+    thickness : float
+        Thickness of the layer along the face normal. For a pyramidal layer
+        this is the pyramid height, unless `height` is given separately.
+    material : mp.Medium, optional
+        Material of the layer. If None, it is built from epsilon_real and
+        epsilon_imag (default: None)
+    epsilon_real, epsilon_imag : float, optional
+        Complex permittivity used when `material` is None. The imaginary part
+        becomes a conductivity, D_conductivity = eps_imag*2*pi*freq/eps_real
+        (defaults: 1.0 and 0.0)
+    freq : float, optional
+        Frequency at which epsilon_imag is converted to a conductivity
+        (default: 1/3)
+    shape : {'flat', 'pyramidal'}, optional
+        'flat' places a slab covering the whole face; 'pyramidal' places a
+        row of stepped pyramids on it, via PyramidalAbsorbers
+        (default: 'flat')
+    blocks : {'both', 'up', 'down'}, optional
+        Which of the two aperture stop blocks the layer is applied to
+        (default: 'both')
+    height : float, optional
+        Pyramid height, for shape='pyramidal' only (default: `thickness`)
+    num_pyramids : int, optional
+        Number of pyramids along the face, for shape='pyramidal'
+        (default: 10)
+    n_layers : int, optional
+        Number of steps per pyramid, for shape='pyramidal' (default: 10)
+    top_width : float, optional
+        Width of the pyramid tip, for shape='pyramidal' (default: 0)
+    pyramid_kwargs : dict, optional
+        Extra keyword arguments passed straight to PyramidalAbsorbers
+    """
+    side: Literal['front', 'back', 'inner']
+    thickness: float
+    material: mp.Medium = None
+    epsilon_real: float = 1.0
+    epsilon_imag: float = 0.0
+    freq: float = 1/3
+    shape: Literal['flat', 'pyramidal'] = 'flat'
+    blocks: Literal['both', 'up', 'down'] = 'both'
+    # Pyramidal-only parameters
+    height: float = None
+    num_pyramids: int = 10
+    n_layers: int = 10
+    top_width: float = 0
+    pyramid_kwargs: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.side not in ('front', 'back', 'inner'):
+            raise ValueError(f"Invalid absorber side: {self.side}. "
+                             "Choose 'front', 'back' or 'inner'.")
+        if self.shape not in ('flat', 'pyramidal'):
+            raise ValueError(f"Invalid absorber shape: {self.shape}. "
+                             "Choose 'flat' or 'pyramidal'.")
+        if self.blocks not in ('both', 'up', 'down'):
+            raise ValueError(f"Invalid absorber blocks: {self.blocks}. "
+                             "Choose 'both', 'up' or 'down'.")
+        if self.extent <= 0:
+            raise ValueError(f"Absorber layer on the {self.side} side needs a "
+                             "positive thickness (or height, if pyramidal).")
+
+    @property
+    def extent(self):
+        """How far the layer reaches out from the face it sits on"""
+        if self.shape == 'pyramidal' and self.height is not None:
+            return self.height
+        return self.thickness
+
+    def get_material(self):
+        """The mp.Medium of the layer, built from epsilon if not given directly"""
+        if self.material is not None:
+            return self.material
+
+        if self.epsilon_imag:
+            # Narrow-band absorption, as in meep.readthedocs.io/en/latest/Materials
+            D_conductivity = self.epsilon_imag * 2 * np.pi * self.freq / self.epsilon_real
+            return mp.Medium(epsilon=self.epsilon_real, D_conductivity=D_conductivity)
+
+        return mp.Medium(epsilon=self.epsilon_real)
 
 
 class ApertureStop(object):
@@ -777,14 +902,19 @@ class ApertureStop(object):
                  diameter, 
                  thickness,
                  pos_x=None,
-                 pos_y=None, 
-                 n_refr = 1, 
+                 pos_y=None,
+                 orientation = None,
+                 n_refr = 1,
                  material= None,
                  conductivity = mp.inf,
                  rot_axis = 'x',
-                 rot_angle = 0,                 
+                 rot_angle = 0,
                  y_centre_offset = [0,0],
-                 y_size_offset = [0,0]):
+                 y_size_offset = [0,0],
+                 print_vertices = False,
+                 absorber_layers = None,
+                 preserve_aperture = False,
+                 absorber_height = 1.0):
         '''
         Defines the attributes of the aperture stop object
 
@@ -798,11 +928,22 @@ class ApertureStop(object):
         diameter : float 
             Diameter of the aperture stop opening
         pos_x : float, optional
-            Position of the left surface of the aperture stop along x-axis
-            (mutually exclusive with pos_y)
+            For a 'vertical' aperture stop: position of the left surface of
+            the slab along the x-axis.
+            For a 'horizontal' aperture stop: position of the centre of the
+            opening along the x-axis (defaults to 0 if not given).
         pos_y : float, optional
-            Position of the bottom surface of the aperture stop along y-axis
-            (mutually exclusive with pos_x)
+            For a 'horizontal' aperture stop: position of the bottom surface
+            of the slab along the y-axis.
+            For a 'vertical' aperture stop: position of the centre of the
+            opening along the y-axis (defaults to 0 if not given).
+            At least one of pos_x/pos_y must be given; both may be given
+            together to place an off-axis (decentred) opening.
+        orientation : str, optional
+            'vertical' (slab normal along x) or 'horizontal' (slab normal
+            along y). If not given, it is inferred from which position was
+            supplied: pos_x only -> 'vertical', pos_y only -> 'horizontal'.
+            It is required when both pos_x and pos_y are given.
         thickness : float
             Thickness of aperture stop slab
         n_refr : float, optional 
@@ -816,29 +957,62 @@ class ApertureStop(object):
             (default : 'x')
         rot_angle : float, optional
             Angle by which the aperture stop is rotated w.r.t rot_axis (default : 0 degrees)
+        print_vertices : bool, optional
+            If True, the corner vertices of both blocks are printed when the
+            aperture stop is assembled (default : False). They can also be
+            printed at any time with print_vertices(), or retrieved with
+            get_vertices().
+        absorber_layers : list, optional
+            Absorber layers to put on the faces of the aperture stop, as
+            ApertureAbsorberLayer objects or as dicts of their fields
+            (default : None). Layers on the same side are stacked outwards in
+            the order given. They are NOT returned by assemble(); collect them
+            with get_absorbers().
+        preserve_aperture : bool, optional
+            If True, blocks carrying absorber layers on their 'inner' side are
+            pulled back by the thickness of that stack, so the clear opening
+            left between the absorbers is exactly `diameter` (default : False,
+            i.e. the absorbers eat into the opening).
+        absorber_height : float, optional
+            Height along z of the absorber prisms; irrelevant in a 2D
+            simulation (default : 1.0)
         '''
         self.mpsat_sim = mpsat_sim
         self.type = type                
         self.thick = thickness
         
-        # Check that only one position is specified
-        if pos_x is not None and pos_y is not None:
-            raise ValueError("Cannot specify both pos_x and pos_y. Choose one direction for the aperture stop.")
-        
+        # Check that at least one position is specified
         if pos_x is None and pos_y is None:
             raise ValueError("Must specify either pos_x or pos_y for the aperture stop position.")
-        
-        # Set position based on which one is provided
-        if pos_x is not None:
+
+        # Work out the orientation of the slab
+        if orientation is None:
+            if pos_x is not None and pos_y is not None:
+                raise ValueError("When both pos_x and pos_y are given, the orientation "
+                                 "('vertical' or 'horizontal') must be specified.")
+            # Blocks oriented vertically (along y-axis) if only pos_x is given,
+            # horizontally (along x-axis) if only pos_y is given
+            orientation = 'vertical' if pos_x is not None else 'horizontal'
+
+        if orientation not in ('vertical', 'horizontal'):
+            raise ValueError(f"Invalid orientation: {orientation}. Choose 'vertical' or 'horizontal'.")
+
+        self.orientation = orientation
+
+        # The position along the slab normal is mandatory, the position along the
+        # opening is optional and defaults to a centred (on-axis) opening
+        if self.orientation == 'vertical':
+            if pos_x is None:
+                raise ValueError("A 'vertical' aperture stop needs pos_x (position of its left surface).")
             # Convert the pos_x in (0,x) coordinate system to (-x/2, x/2)
             self.pos_x = pos_x #- self.mpsat_sim.cell.x/2
-            self.pos_y = None
-            self.orientation = 'vertical'  # Blocks oriented vertically (along y-axis)
+            self.pos_y = 0 if pos_y is None else pos_y
         else:
+            if pos_y is None:
+                raise ValueError("A 'horizontal' aperture stop needs pos_y (position of its bottom surface).")
             # Convert the pos_y in (0,y) coordinate system to (-y/2, y/2)
             self.pos_y = pos_y #- self.mpsat_sim.cell.y/2
-            self.pos_x = None
-            self.orientation = 'horizontal'  # Blocks oriented horizontally (along x-axis)
+            self.pos_x = 0 if pos_x is None else pos_x
 
         self.diameter = diameter        
         self.permittivity = n_refr**2   
@@ -849,10 +1023,79 @@ class ApertureStop(object):
         self.rot_angle = rot_angle
         self.y_centre_offset = y_centre_offset
         self.y_size_offset = y_size_offset
+        self._print_vertices = print_vertices
+        self.blocks = None      # Filled in once the aperture stop is assembled
 
-        print(f"Aperture stop created with orientation: {self.orientation}")
+        # Absorber layers on the faces of the stop
+        self.absorber_layers = self._normalise_absorber_layers(absorber_layers)
+        self.preserve_aperture = preserve_aperture
+        self.absorber_height = absorber_height
+        self.absorbers = None   # Filled in by get_absorbers()
+
+        print(f"Aperture stop created with orientation: {self.orientation} "
+              f"at (pos_x, pos_y) = ({self.pos_x}, {self.pos_y})")
         print("type material: ", self.material)
-        
+
+        if self.absorber_layers:
+            sides = ', '.join(f'{layer.side}/{layer.shape}' for layer in self.absorber_layers)
+            print(f"Absorber layers requested on: {sides} "
+                  f"(preserve_aperture = {self.preserve_aperture})")
+
+
+    @staticmethod
+    def _normalise_absorber_layers(absorber_layers):
+        '''
+        Turns the absorber_layers argument into a list of ApertureAbsorberLayer
+
+        Accepts ApertureAbsorberLayer objects, dicts of their fields, or a
+        single one of either instead of a list.
+        '''
+        if not absorber_layers:
+            return []
+
+        if isinstance(absorber_layers, (ApertureAbsorberLayer, dict)):
+            absorber_layers = [absorber_layers]
+
+        layers = []
+        for layer in absorber_layers:
+            if isinstance(layer, dict):
+                layers.append(ApertureAbsorberLayer(**layer))
+            elif isinstance(layer, ApertureAbsorberLayer):
+                layers.append(layer)
+            else:
+                raise TypeError("absorber_layers must hold ApertureAbsorberLayer "
+                                f"objects or dicts, not {type(layer).__name__}")
+
+        return layers
+
+    def _layers_on(self, side, block):
+        '''
+        Returns the absorber layers on one side of one block ('up' or 'down'),
+        in the order they are stacked outwards from the face
+        '''
+        return [layer for layer in self.absorber_layers
+                if layer.side == side and layer.blocks in ('both', block)]
+
+    def _aperture_inset(self, block):
+        '''
+        How far the given block is pulled back from the opening so that the
+        inner absorber stack does not eat into the clear aperture
+        '''
+        if not self.preserve_aperture:
+            return 0
+
+        return sum(layer.extent for layer in self._layers_on('inner', block))
+
+    def _check_block_sizes(self, size_up, size_down):
+        '''
+        Clips the two block sizes to zero and warns if the opening has been
+        shifted so far off-axis that a block falls outside the cell
+        '''
+        if size_up < 0 or size_down < 0:
+            warnings.warn("The aperture stop opening extends beyond the cell: "
+                          "the block sizes have been clipped to 0. Check the "
+                          "position/diameter of the aperture stop.")
+        return max(size_up, 0), max(size_down, 0)
 
     def square_aperture(self):
         '''
@@ -864,36 +1107,49 @@ class ApertureStop(object):
             material = mp.Medium(epsilon=self.permittivity, 
                                 D_conductivity = self.conductivity)
         
+        # Half-opening seen by each block: with preserve_aperture the block is
+        # pulled back so its inner absorber stack ends on the clear aperture
+        half_open_up = self.diameter/2 + self._aperture_inset('up')
+        half_open_down = self.diameter/2 + self._aperture_inset('down')
+
         if self.orientation == 'vertical':
             # Original implementation: blocks along y-axis, positioned at pos_x
-            block_size_y_up = (self.mpsat_sim.cell.y - self.diameter) / 2 
-            block_size_y_down = (self.mpsat_sim.cell.y - self.diameter) / 2 
-            
+            # pos_y (0 if not given) is the centre of the opening along y
+            open_centre = self.pos_y
+            block_size_y_up = self.mpsat_sim.cell.y/2 - open_centre - half_open_up
+            block_size_y_down = self.mpsat_sim.cell.y/2 + open_centre - half_open_down
+            block_size_y_up, block_size_y_down = self._check_block_sizes(block_size_y_up,
+                                                                        block_size_y_down)
+
             size_up = mp.Vector3(self.thick, block_size_y_up + self.y_size_offset[0], 0)
             centre_up = mp.Vector3(self.pos_x + (self.thick/2),
-                                self.diameter/2 + (block_size_y_up + self.y_size_offset[0])/2 + self.y_centre_offset[0],
+                                open_centre + half_open_up + (block_size_y_up + self.y_size_offset[0])/2 + self.y_centre_offset[0],
                                 0)
 
             size_down = mp.Vector3(self.thick, block_size_y_down + self.y_size_offset[1], 0)
             centre_down = mp.Vector3(self.pos_x + (self.thick/2),
-                                    -self.diameter/2 - (block_size_y_down + self.y_size_offset[1])/2 + self.y_centre_offset[1],
+                                    open_centre - half_open_down - (block_size_y_down + self.y_size_offset[1])/2 + self.y_centre_offset[1],
                                     0)
-            
+
         else:  # orientation == 'horizontal'
             # New implementation: blocks along x-axis, positioned at pos_y
-            block_size_x_left = (self.mpsat_sim.cell.x - self.diameter) / 2 
-            block_size_x_right = (self.mpsat_sim.cell.x - self.diameter) / 2 
-            
+            # pos_x (0 if not given) is the centre of the opening along x
+            open_centre = self.pos_x
+            block_size_x_right = self.mpsat_sim.cell.x/2 - open_centre - half_open_up
+            block_size_x_left = self.mpsat_sim.cell.x/2 + open_centre - half_open_down
+            block_size_x_right, block_size_x_left = self._check_block_sizes(block_size_x_right,
+                                                                           block_size_x_left)
+
             size_up = mp.Vector3(block_size_x_right + self.y_size_offset[0], self.thick, 0)
-            centre_up = mp.Vector3(self.diameter/2 + (block_size_x_right + self.y_size_offset[0])/2 + self.y_centre_offset[0],
+            centre_up = mp.Vector3(open_centre + half_open_up + (block_size_x_right + self.y_size_offset[0])/2 + self.y_centre_offset[0],
                                  self.pos_y + (self.thick/2),
                                  0)
 
             size_down = mp.Vector3(block_size_x_left + self.y_size_offset[1], self.thick, 0)
-            centre_down = mp.Vector3(-self.diameter/2 - (block_size_x_left + self.y_size_offset[1])/2 + self.y_centre_offset[1],
+            centre_down = mp.Vector3(open_centre - half_open_down - (block_size_x_left + self.y_size_offset[1])/2 + self.y_centre_offset[1],
                                    self.pos_y + (self.thick/2),
                                    0)
-        
+
         aperture_stop_up = meep_block(size = size_up,
                                         center = centre_up,
                                         material = material,
@@ -909,23 +1165,299 @@ class ApertureStop(object):
         print(f'Aperture stop created ({self.orientation}): Up size={size_up}, Down size={size_down}')
         print(f'Centers: Up={centre_up}, Down={centre_down}')
 
+        self.blocks = (aperture_stop_up, aperture_stop_down)
+
         return aperture_stop_up, aperture_stop_down
 
-    def assemble(self):
+    @staticmethod
+    def _block_vertices(block):
         '''
-        Returns the block objects for the aperture stop according to the type
-        
+        Returns the four corner vertices of a 2D meep block as mp.Vector3,
+        anticlockwise in the block's own (possibly rotated) frame:
+        (-e1,-e2), (+e1,-e2), (+e1,+e2), (-e1,+e2)
+        '''
+        half_e1 = block.e1.unit().scale(block.size.x / 2)
+        half_e2 = block.e2.unit().scale(block.size.y / 2)
+
+        return [block.center - half_e1 - half_e2,
+                block.center + half_e1 - half_e2,
+                block.center + half_e1 + half_e2,
+                block.center - half_e1 + half_e2]
+
+    def get_vertices(self):
+        '''
+        Returns the corner vertices of the two aperture stop blocks
+
+        Assembles the aperture stop first if it has not been assembled yet.
+
+        Returns
+        -------
+        dict
+            {'up': [v1, v2, v3, v4], 'down': [v1, v2, v3, v4]} where each
+            vertex is an mp.Vector3. For a 'horizontal' aperture stop 'up'
+            is the +x (right) block and 'down' the -x (left) one.
+        '''
+        if self.blocks is None:
+            self._build()
+
+        block_up, block_down = self.blocks
+
+        return {'up': self._block_vertices(block_up),
+                'down': self._block_vertices(block_down)}
+
+    def print_vertices(self):
+        '''
+        Prints the corner vertices of the two aperture stop blocks
+
+        Returns
+        -------
+        dict
+            The same dictionary as get_vertices()
+        '''
+        vertices = self.get_vertices()
+
+        # 'up'/'down' are along y for a vertical stop and along x for a horizontal one
+        if self.orientation == 'vertical':
+            block_names = {'up': 'UP (+y) block', 'down': 'DOWN (-y) block'}
+        else:
+            block_names = {'up': 'UP (+x, right) block', 'down': 'DOWN (-x, left) block'}
+
+        corner_names = ['(-e1,-e2)', '(+e1,-e2)', '(+e1,+e2)', '(-e1,+e2)']
+
+        print(f'Aperture stop vertices ({self.orientation}, '
+              f'rotation: {self.rot_angle}° about {self.rot_axis}):')
+        for key in ('up', 'down'):
+            print(f'  {block_names[key]}:')
+            for name, vertex in zip(corner_names, vertices[key]):
+                print(f'    {name} : x = {vertex.x:.6g}, y = {vertex.y:.6g}, z = {vertex.z:.6g}')
+
+        return vertices
+
+    # Which face of a block each absorber side sits on, in the block's own frame.
+    # For a vertical stop e1 is the slab normal (x) and e2 runs along the blade (y);
+    # for a horizontal stop the two swap over.
+    _ABSORBER_FACES = {
+        'vertical':   {'front': '-e1', 'back': '+e1', 'inner_up': '-e2', 'inner_down': '+e2'},
+        'horizontal': {'front': '-e2', 'back': '+e2', 'inner_up': '-e1', 'inner_down': '+e1'},
+    }
+
+    def _face_geometry(self, block, side, which):
+        '''
+        Returns the two corner vertices of a face and its outward unit normal
+
+        Parameters
+        ----------
+        block : mp.Block
+            One of the two aperture stop blocks
+        side : str
+            'front', 'back' or 'inner'
+        which : str
+            'up' or 'down', i.e. which of the two blocks this is
+
         Returns
         -------
         tuple
-            Two block objects (aperture_stop_up, aperture_stop_down)
+            (vertex_a, vertex_b, outward_normal) as mp.Vector3
+        '''
+        faces = self._ABSORBER_FACES[self.orientation]
+        face = faces[side] if side in ('front', 'back') else faces[f'inner_{which}']
+
+        v = self._block_vertices(block)
+        # Edges of the block, keyed by the face they belong to
+        edges = {'-e1': (v[0], v[3]), '+e1': (v[1], v[2]),
+                 '-e2': (v[0], v[1]), '+e2': (v[3], v[2])}
+
+        axis = block.e1.unit() if face.endswith('e1') else block.e2.unit()
+        normal = axis.scale(-1) if face.startswith('-') else axis
+
+        vertex_a, vertex_b = edges[face]
+
+        return vertex_a, vertex_b, normal
+
+    def _flat_absorber(self, vertex_a, vertex_b, normal, offset, layer):
+        '''
+        Returns a flat absorber slab covering a face, as an mp.Prism
+
+        The slab spans the whole face and sits between `offset` and
+        `offset + layer.extent` along the outward normal.
+        '''
+        inner_a = vertex_a + normal.scale(offset)
+        inner_b = vertex_b + normal.scale(offset)
+        outer_b = vertex_b + normal.scale(offset + layer.extent)
+        outer_a = vertex_a + normal.scale(offset + layer.extent)
+
+        vertices = ensure_ccw_order([inner_a, inner_b, outer_b, outer_a])
+
+        return mp.Prism(vertices=vertices,
+                        height=self.absorber_height,
+                        axis=mp.Vector3(0, 0, 1),
+                        material=layer.get_material())
+
+    def _pyramidal_absorber(self, vertex_a, vertex_b, normal, offset, layer):
+        '''
+        Returns a row of pyramids standing on a face, as a list of blocks
+
+        Built with PyramidalAbsorbers, which anchors its pyramids to a cell
+        edge, so the corresponding edge offset is worked out from the position
+        of the face. Substrate and PEC backing are switched off: the aperture
+        stop itself is what backs these absorbers.
+        '''
+        if self.rot_angle != 0:
+            raise ValueError("Pyramidal absorber layers need an unrotated aperture stop "
+                             f"(rot_angle = {self.rot_angle}). Use shape='flat' instead.")
+
+        # PyramidalAbsorbers measures its pyramids from the cell edge, past the PML
+        base_offset = self.mpsat_sim.factor_dpml * self.mpsat_sim.dpml
+
+        for key in ('add_substrate', 'add_pec_backing'):
+            if layer.pyramid_kwargs.get(key):
+                warnings.warn(f"{key} is not supported for aperture stop absorbers "
+                              "and has been switched off: the stop backs the pyramids.")
+        kwargs = {key: value for key, value in layer.pyramid_kwargs.items()
+                  if key not in ('add_substrate', 'add_pec_backing')}
+
+        cell = self.mpsat_sim.cell
+
+        # Anchor the base of the pyramids on the face, pointing outwards, and
+        # spread them over the extent of the face
+        if abs(normal.x) > abs(normal.y):
+            face_x = vertex_a.x + normal.x * offset
+            span = sorted([vertex_a.y, vertex_b.y])
+            coverage = {'y_coverage_start': span[0], 'y_coverage_end': span[1]}
+            if normal.x > 0:
+                edge = 'left'    # Pyramids grow towards +x
+                kwargs['x_left_offset'] = face_x + cell.x/2 - base_offset
+            else:
+                edge = 'right'   # Pyramids grow towards -x
+                kwargs['x_right_offset'] = face_x - cell.x/2 + base_offset
+        else:
+            face_y = vertex_a.y + normal.y * offset
+            span = sorted([vertex_a.x, vertex_b.x])
+            coverage = {'x_coverage_start': span[0], 'x_coverage_end': span[1]}
+            if normal.y > 0:
+                edge = 'bottom'  # Pyramids grow towards +y
+                kwargs['y_bottom_offset'] = face_y + cell.y/2 - base_offset
+            else:
+                edge = 'top'     # Pyramids grow towards -y
+                kwargs['y_top_offset'] = face_y - cell.y/2 + base_offset
+
+        face_width = span[1] - span[0]
+        if face_width <= 0:
+            warnings.warn(f"Skipping the pyramidal absorber on the {layer.side} side: "
+                          "the face it sits on has zero width.")
+            return []
+
+        pyramids = PyramidalAbsorbers(mpsat_sim=self.mpsat_sim,
+                                      num_pyramids=layer.num_pyramids,
+                                      base_width=face_width / layer.num_pyramids,
+                                      top_width=layer.top_width,
+                                      height=layer.extent,
+                                      n_layers=layer.n_layers,
+                                      material=layer.get_material(),
+                                      freq=layer.freq,
+                                      edges=[edge],
+                                      add_substrate=False,
+                                      add_pec_backing=False,
+                                      name=f'{self.object_type} {layer.side} pyramids',
+                                      **coverage,
+                                      **kwargs)
+
+        return pyramids.assemble()
+
+    def get_absorbers(self):
+        '''
+        Returns the absorber layers requested for the aperture stop
+
+        Assembles the aperture stop first if it has not been assembled yet.
+        The objects are NOT part of what assemble() returns, so add them to
+        the MEEP geometry separately, e.g.
+        mpsat_sim.meep_geometry.extend(stop.get_absorbers())
+
+        Returns
+        -------
+        list
+            mp.Prism objects for the flat layers and mp.Block objects for the
+            pyramidal ones, in the order the layers were given
+        '''
+        if not self.absorber_layers:
+            return []
+
+        if self.blocks is None:
+            self._build()
+
+        if self.rot_angle != 0 and self.rot_axis != 'z':
+            warnings.warn(f"The aperture stop is rotated about {self.rot_axis}, so its faces "
+                          "leave the xy-plane: the absorber layers will be built from the "
+                          "out-of-plane vertices and are unlikely to be what you want.")
+
+        blocks = {'up': self.blocks[0], 'down': self.blocks[1]}
+        absorbers = []
+
+        for which, block in blocks.items():
+            for side in ('front', 'back', 'inner'):
+                layers = self._layers_on(side, which)
+                if not layers:
+                    continue
+
+                vertex_a, vertex_b, normal = self._face_geometry(block, side, which)
+
+                # Layers stack outwards from the face, in the order given
+                offset = 0
+                for layer in layers:
+                    if layer.shape == 'pyramidal':
+                        absorbers.extend(self._pyramidal_absorber(vertex_a, vertex_b,
+                                                                  normal, offset, layer))
+                    else:
+                        absorbers.append(self._flat_absorber(vertex_a, vertex_b,
+                                                             normal, offset, layer))
+                    offset += layer.extent
+
+        self.absorbers = absorbers
+        print(f'Aperture stop absorbers assembled: {len(absorbers)} objects from '
+              f'{len(self.absorber_layers)} layer definitions')
+
+        return absorbers
+
+    def _build(self):
+        '''
+        Builds the block objects for the aperture stop according to the type
         '''
         if self.type == 'square':
             return self.square_aperture()
         else:
             raise ValueError(f'Invalid aperture stop type: {self.type}. Currently only "square" is supported.')
 
-    
+    def assemble(self):
+        '''
+        Returns the block objects for the aperture stop according to the type
+
+        Returns
+        -------
+        tuple
+            Two block objects (aperture_stop_up, aperture_stop_down)
+        '''
+        blocks = self._build()
+
+        if self._print_vertices:
+            self.print_vertices()
+
+        return blocks
+
+    def assemble_all(self):
+        '''
+        Returns the aperture stop blocks together with their absorber layers
+
+        Returns
+        -------
+        tuple
+            (aperture_stop_up, aperture_stop_down, absorbers), where absorbers
+            is the (possibly empty) list returned by get_absorbers()
+        '''
+        block_up, block_down = self.assemble()
+
+        return block_up, block_down, self.get_absorbers()
+
+
 ###& DETECTOR CLASS
 class Detector():
     '''
@@ -1451,803 +1983,6 @@ class FluxMonitor():
         )
         print(f"Flux monitor {self.monitor_type} assembled: {flux_region}")
         return flux_region
-    
-
-#~ OLD PYRAMIDAL ASBORBE CLASS
-class PyramidalAbsorbers(object):
-    '''
-    Class defining pyramidal absorbers along the edges of the simulation cell.
-    '''
-    def __init__(self,
-                 mpsat_sim,
-                 num_pyramids,
-                 add_pyramids=True,
-                 base_width=None,
-                 top_width=0,
-                 height=None,
-                 layer_thickness=None,
-                 n_layers=10,
-                 material=None,
-                 epsilon_real=2.5,
-                 epsilon_imag=0,
-                 freq=1/3,
-                 x_coverage_start=None,
-                 x_coverage_end=None,
-                 y_coverage_start=None,
-                 y_coverage_end=None,
-                 coverage_percent=40,
-                 edges=["top", "bottom"],
-                 x_left_offset=0,
-                 x_right_offset=0,
-                 y_top_offset=0,
-                 y_bottom_offset=0,
-                 # Substrate parameters
-                 add_substrate=True,
-                 substrate_thickness=None,
-                 substrate_material=None,
-                 substrate_epsilon_real=None,
-                 substrate_epsilon_imag=None,
-                 substrate_extends_beyond_pyramids=True,
-                 substrate_extension=0.5,
-                 # PEC backing parameters
-                 add_pec_backing=False,
-                 pec_thickness=None,
-                 pec_extends_beyond_substrate=True,
-                 pec_extension=0,
-                 name=None):
-        '''
-        Defines pyramidal absorbers along cell edges
-
-        Parameters
-        ----------
-        mpsat_sim : MEEPSAT
-            MEEPSAT simulation object
-        base_width : float, optional
-            Width of the pyramid base (default: calculated from coverage and num_pyramids)
-        top_width : float, optional
-            Width of the pyramid top layer (default: 0 for pointed pyramid)
-        height : float, optional
-            Total height of each pyramid (default: None, calculated from layer_thickness)
-        layer_thickness : float, optional
-            Thickness of each layer (default: None, calculated from height)
-        num_pyramids : int, optional
-            Number of pyramids along each edge (default: 20)
-        n_layers : int, optional
-            Number of layers per pyramid (default: 10)
-        material : mp.Medium, optional
-            Material for the pyramids (overrides epsilon values if provided)
-        epsilon_real : float, optional 
-            Real part of the permittivity (default: 2.5)
-        epsilon_imag : float, optional
-            Imaginary part of the permittivity (default: 0)
-        freq : float, optional
-            Frequency for material properties (default: 1/3)
-        x_coverage_start : float, optional
-            Start position for top/bottom pyramids (default: calculated from coverage_percent)
-        x_coverage_end : float, optional
-            End position for top/bottom pyramids (default: calculated from coverage_percent)
-        y_coverage_start : float, optional
-            Start position for left/right pyramids (default: calculated from coverage_percent)
-        y_coverage_end : float, optional
-            End position for left/right pyramids (default: calculated from coverage_percent)
-        coverage_percent : float, optional
-            Percentage of cell width to cover with pyramids (default: 40%)
-        edges : list of str, optional
-            Which edges to place pyramids on (default: ["top", "bottom"])
-            Options: "top", "bottom", "left", "right"
-        x_left_offset : float, optional
-            Offset for left edge pyramids (default: 0)
-        x_right_offset : float, optional
-            Offset for right edge pyramids (default: 0)
-        y_top_offset : float, optional 
-            Offset for top edge pyramids (default: 0)
-        y_bottom_offset : float, optional
-            Offset for bottom edge pyramids (default: 0)
-        add_substrate : bool, optional
-            Whether to add substrate beneath pyramids (default: True)
-        substrate_thickness : float, optional
-            Thickness of the substrate (default: same as layer_thickness)
-        substrate_material : mp.Medium, optional
-            Material for the substrate (default: same as pyramid material)
-        substrate_epsilon_real : float, optional
-            Real part of substrate permittivity (default: same as pyramid)
-        substrate_epsilon_imag : float, optional
-            Imaginary part of substrate permittivity (default: same as pyramid)
-        substrate_extends_beyond_pyramids : bool, optional
-            Whether substrate extends beyond pyramid coverage (default: True)
-        substrate_extension : float, optional
-            How much substrate extends beyond pyramids on each side (default: 0.5)
-        add_pec_backing : bool, optional
-            Whether to add PEC backing beneath substrate (default: False)
-        pec_thickness : float, optional
-            Thickness of the PEC backing (default: same as substrate_thickness)
-        pec_extends_beyond_substrate : bool, optional
-            Whether PEC backing extends beyond substrate (default: True)
-        pec_extension : float, optional
-            How much PEC backing extends beyond substrate on each side (default: 0)
-        name : str, optional
-            Name of the object (default: None)
-            
-        Notes
-        -----
-        Priority for determining pyramid dimensions:
-        1. If both height and layer_thickness are provided, height takes priority
-        2. If only height is provided, layer_thickness = height / n_layers
-        3. If only layer_thickness is provided, height = layer_thickness * n_layers
-        4. If neither is provided, defaults are calculated based on base_width
-        '''
-        # Sims object
-        self.mpsat_sim = set_sims_obj(self, mpsat_sim)
-        
-        # self.mpsat_sim = mpsat_sim
-        # Basic parameters
-        self.name = name if name else "Pyramidal Absorbers"
-        self.object_type = 'PyramidalAbsorber'
-        self.num_pyramids = num_pyramids
-        self.add_pyramids = add_pyramids
-        self.n_layers = n_layers
-        self.edges = edges
-        self.coverage_percent = coverage_percent
-        self.top_width = top_width
-        
-        # Offset parameters
-        self.x_left_offset = x_left_offset
-        self.x_right_offset = x_right_offset
-        self.y_top_offset = y_top_offset
-        self.y_bottom_offset = y_bottom_offset
-        
-        # Substrate parameters
-        self.add_substrate = add_substrate
-        self.substrate_extends_beyond_pyramids = substrate_extends_beyond_pyramids
-        self.substrate_extension = substrate_extension
-        
-        # PEC backing parameters
-        self.add_pec_backing = add_pec_backing
-        self.pec_extends_beyond_substrate = pec_extends_beyond_substrate
-        self.pec_extension = pec_extension
-        
-        self.x_coverage_start = x_coverage_start
-        self.x_coverage_end = x_coverage_end
-        self.y_coverage_start = y_coverage_start
-        self.y_coverage_end = y_coverage_end
-        
-        # Validate number of pyramids
-        if self.x_coverage_start is not None and self.x_coverage_end is not None:
-            if self.num_pyramids != int((self.x_coverage_end - self.x_coverage_start)/base_width):
-                warnings.warn(f"The number of pyramids specified ({self.num_pyramids}) cannot fit in the x coverage range ({self.x_coverage_end - self.x_coverage_start}). Reducing the number of pyramids.")
-                # Round the next lower integer
-                self.num_pyramids = int((self.x_coverage_end - self.x_coverage_start)/base_width) + 1 
-                print(f"New number of pyramids: {self.num_pyramids}")
-            elif self.num_pyramids < 1:
-                raise ValueError("Number of pyramids must be at least 1.")
-            else:
-                self.num_pyramids = self.num_pyramids
-
-
-        # Calculate x coverage area (for top/bottom)
-        if self.x_coverage_start is None or self.x_coverage_end is None:
-            coverage_factor = self.coverage_percent / 100.0
-            # Calculate half the coverage width to center it
-            half_coverage_x = (self.mpsat_sim.cell_size[0] * coverage_factor) / 2
-            self.x_coverage_start = -half_coverage_x
-            self.x_coverage_end = half_coverage_x            
-        else:
-            self.x_coverage_start = self.x_coverage_start
-            self.x_coverage_end = self.x_coverage_end
-            
-        self.x_coverage_width = self.x_coverage_end - self.x_coverage_start
-
-        # Calculate y coverage area (for left/right)
-        if self.y_coverage_start is None or self.y_coverage_end is None:
-            coverage_factor = self.coverage_percent / 100.0
-            # Calculate half the coverage width to center it
-            half_coverage_y = (self.mpsat_sim.cell_size[1] * coverage_factor) / 2
-            self.y_coverage_start = -half_coverage_y
-            self.y_coverage_end = half_coverage_y
-        else:
-            self.y_coverage_start = self.y_coverage_start
-            self.y_coverage_end = self.y_coverage_end
-            
-        self.y_coverage_width = self.y_coverage_end - self.y_coverage_start
-
-        # Set base widths (for x and y directions)
-        if base_width is None:
-            # Calculate base widths based on coverage and number of pyramids
-            self.x_base_width = self.x_coverage_width / self.num_pyramids
-            self.y_base_width = self.y_coverage_width / self.num_pyramids
-        else:
-            self.x_base_width = base_width
-            self.y_base_width = base_width
-        
-        # Handle height and layer_thickness parameters with priority logic
-        self._set_pyramid_dimensions(height, layer_thickness)
-
-        # Check if imaginary part is provided and set the conductivity accordingly
-        if epsilon_imag != 0:
-            self.epsilon_imag = epsilon_imag
-            self.D_conductivity = epsilon_imag * 2 * np.pi * freq / epsilon_real
-        else:
-            self.epsilon_imag = 0
-            self.D_conductivity = None # No conductivity if imaginary part is zero
-        
-        # Set pyramid material
-        if material is not None:
-            self.material = material
-        else:
-            set_material_obj(self, epsilon_real, epsilon_imag, freq)
-            self.material = mp.Medium(epsilon=self.epsilon_real, D_conductivity=self.D_conductivity)
-        
-        # Set substrate parameters
-        self._set_substrate_parameters(substrate_thickness, substrate_material, 
-                                     substrate_epsilon_real, substrate_epsilon_imag)
-        
-        # Set PEC backing parameters
-        if pec_thickness is None:
-            self.pec_thickness = self.substrate_thickness if self.add_substrate else self.layer_thickness
-        else:
-            self.pec_thickness = pec_thickness
-            
-        print(f"PyramidalAbsorbers created: {self.num_pyramids} pyramids on {self.edges}")
-        print(f"Base width: {max(self.x_base_width, self.y_base_width):.3f}, "
-              f"Top width: {self.top_width:.3f}")
-        print(f"Height: {self.height:.3f}, Layer thickness: {self.layer_thickness:.3f}")
-        if self.add_substrate:
-            print(f"Substrate: thickness={self.substrate_thickness:.3f}, "
-                  f"extends_beyond={self.substrate_extends_beyond_pyramids}")
-        if self.add_pec_backing:
-            print(f"PEC backing: thickness={self.pec_thickness:.3f}, "
-                  f"extends_beyond={self.pec_extends_beyond_substrate}")
-            
-    def _set_substrate_parameters(self, substrate_thickness, substrate_material, 
-                                substrate_epsilon_real, substrate_epsilon_imag):
-        """
-        Set substrate parameters with proper defaults
-        
-        Parameters
-        ----------
-        substrate_thickness : float or None
-            Thickness of substrate
-        substrate_material : mp.Medium or None
-            Material for substrate
-        substrate_epsilon_real : float or None
-            Real part of substrate permittivity
-        substrate_epsilon_imag : float or None
-            Imaginary part of substrate permittivity
-        """
-        if not self.add_substrate:
-            return
-            
-        # Set substrate thickness
-        if substrate_thickness is None:
-            self.substrate_thickness = self.layer_thickness  # Same as layer thickness
-        else:
-            self.substrate_thickness = substrate_thickness
-            
-        # Set substrate material
-        if substrate_material is not None:
-            self.substrate_material = substrate_material
-        else:
-            # Use substrate-specific material properties if provided, otherwise use pyramid material
-            if substrate_epsilon_real is not None or substrate_epsilon_imag is not None:
-                sub_eps_real = substrate_epsilon_real if substrate_epsilon_real is not None else self.epsilon_real
-                sub_eps_imag = substrate_epsilon_imag if substrate_epsilon_imag is not None else self.epsilon_imag
-                sub_conductivity = sub_eps_imag * 2 * np.pi * self.freq / sub_eps_real
-                self.substrate_material = mp.Medium(epsilon=sub_eps_real, D_conductivity=sub_conductivity)
-            else:
-                self.substrate_material = self.material  # Same as pyramid material
-
-    def _set_pyramid_dimensions(self, height, layer_thickness):
-        """
-        Set pyramid dimensions based on height and layer_thickness parameters
-        with proper priority handling
-        
-        Parameters
-        ----------
-        height : float or None
-            Total height of pyramid
-        layer_thickness : float or None
-            Thickness of each layer
-        """
-        # Priority logic for determining dimensions
-        if height is not None and layer_thickness is not None:
-            # Both provided - height takes priority
-            self.height = height
-            self.layer_thickness = self.height / self.n_layers
-            warnings.warn(f"Both height ({height}) and layer_thickness ({layer_thickness}) provided. "
-                         f"Using height and calculating layer_thickness = {self.layer_thickness:.3f}")
-            
-        elif height is not None:
-            # Only height provided
-            self.height = height
-            self.layer_thickness = self.height / self.n_layers
-            
-        elif layer_thickness is not None:
-            # Only layer_thickness provided
-            self.layer_thickness = layer_thickness
-            self.height = self.layer_thickness * self.n_layers
-            
-        else:
-            # Neither provided - calculate defaults based on base width
-            max_base_width = max(self.x_base_width, self.y_base_width)
-            width_diff = max_base_width - self.top_width
-            
-            # Default: make the pyramid depth proportional to the width difference
-            # Use a reasonable aspect ratio
-            self.layer_thickness = width_diff / (2 * self.n_layers)
-            self.height = self.layer_thickness * self.n_layers
-            
-            warnings.warn(f"Neither height nor layer_thickness provided. "
-                         f"Using defaults: height={self.height:.3f}, "
-                         f"layer_thickness={self.layer_thickness:.3f}")
-
-    def calculate_layer_width(self, layer_index, base_width):
-        """
-        Calculate the width of a specific layer based on linear interpolation
-        between base_width and top_width
-        
-        Parameters
-        ----------
-        layer_index : int
-            Index of the layer (0 = bottom/base, n_layers-1 = top)
-        base_width : float
-            Width of the base layer
-            
-        Returns
-        -------
-        float
-            Width of the specified layer
-        """
-        # Linear interpolation from base_width to top_width
-        progress = layer_index / (self.n_layers - 1) if self.n_layers > 1 else 0
-        layer_width = base_width - progress * (base_width - self.top_width)
-        return max(layer_width, 0)  # Ensure non-negative width
-
-    def __str__(self):
-        return f"{self.name}: {self.num_pyramids} pyramids on {self.edges}, height={self.height}"
-
-    def assemble(self):
-        """
-        Assemble all pyramidal absorbers, substrates, and PEC backing
-        
-        Returns
-        -------
-        list
-            List of all geometric objects
-        """
-        all_objects = []
-        
-        # First, create PEC backing if enabled (should be placed below substrate)
-        if self.add_pec_backing:
-            pec_blocks = self._create_pec_backing()
-            print(f"Assembled {len(pec_blocks)} PEC backing blocks")
-            all_objects.extend(pec_blocks)
-            pec_count = len(pec_blocks)
-        else:
-            pec_count = 0
-        
-        # Then create substrates if enabled
-        if self.add_substrate:
-            substrates = self._create_substrates()
-            print(f"Assembled {len(substrates)} substrate blocks")
-            all_objects.extend(substrates)
-            substrate_count = len(substrates)
-        else:
-            substrate_count = 0
-        
-        # Finally create pyramids
-        if self.add_pyramids:
-            pyramids = self._create_pyramids()
-            print(f"Assembled {len(pyramids)} pyramid blocks")
-            all_objects.extend(pyramids)
-        
-        # Print summary
-        # print(f"Assembled {len(pyramids)} pyramid blocks, {substrate_count} substrate blocks, "
-        #       f"and {pec_count} PEC backing blocks")
-        print(f"Total objects: {len(all_objects)}")
-        
-        return all_objects
-
-    def _create_pec_backing(self):
-        """
-        Create PEC backing blocks for all edges with absorbers
-        
-        Returns
-        -------
-        list
-            List of PEC backing block objects
-        """
-        pec_blocks = []
-        
-        # Bottom edge PEC backing
-        if "bottom" in self.edges:
-            # Determine width based on extension settings
-            if self.pec_extends_beyond_substrate and self.add_substrate and self.substrate_extends_beyond_pyramids:
-                pec_x_start = self.x_coverage_start - self.substrate_extension - self.pec_extension
-                pec_x_end = self.x_coverage_end + self.substrate_extension + self.pec_extension
-            elif self.pec_extends_beyond_substrate and self.add_substrate:
-                pec_x_start = self.x_coverage_start - self.pec_extension
-                pec_x_end = self.x_coverage_end + self.pec_extension
-            elif self.pec_extends_beyond_substrate:
-                pec_x_start = self.x_coverage_start - self.pec_extension
-                pec_x_end = self.x_coverage_end + self.pec_extension
-            else:
-                pec_x_start = self.x_coverage_start
-                pec_x_end = self.x_coverage_end
-                
-            pec_width = pec_x_end - pec_x_start
-            pec_center_x = (pec_x_start + pec_x_end) / 2
-            
-            # Position PEC below substrate (if present) or below pyramids
-            # if self.add_substrate:
-            #     pec_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
-            #                   (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-            #                   self.substrate_thickness + self.pec_thickness/2 + self.y_bottom_offset)
-            # else:
-            #     pec_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
-            #                   (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-            #                   self.pec_thickness/2 + self.y_bottom_offset)
-            
-            pec_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
-                      (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                      self.pec_thickness/2 + self.y_bottom_offset)
-            
-            pec_blocks.append(mp.Block(
-                size=mp.Vector3(pec_width, self.pec_thickness, mp.inf),
-                center=mp.Vector3(pec_center_x, pec_center_y),
-                material=mp.perfect_electric_conductor
-            ))
-        
-        # Top edge PEC backing
-        if "top" in self.edges:
-            # Determine width based on extension settings
-            if self.pec_extends_beyond_substrate and self.add_substrate and self.substrate_extends_beyond_pyramids:
-                pec_x_start = self.x_coverage_start - self.substrate_extension - self.pec_extension
-                pec_x_end = self.x_coverage_end + self.substrate_extension + self.pec_extension
-            elif self.pec_extends_beyond_substrate and self.add_substrate:
-                pec_x_start = self.x_coverage_start - self.pec_extension
-                pec_x_end = self.x_coverage_end + self.pec_extension
-            elif self.pec_extends_beyond_substrate:
-                pec_x_start = self.x_coverage_start - self.pec_extension
-                pec_x_end = self.x_coverage_end + self.pec_extension
-            else:
-                pec_x_start = self.x_coverage_start
-                pec_x_end = self.x_coverage_end
-                
-            pec_width = pec_x_end - pec_x_start
-            pec_center_x = (pec_x_start + pec_x_end) / 2
-            
-            # # Position PEC above substrate (if present) or above pyramids
-            # if self.add_substrate:
-            #     pec_center_y = (self.mpsat_sim.cell_size[1]/2 - 
-            #                  (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-            #                  self.substrate_thickness + self.pec_thickness/2 + self.y_top_offset)
-            # else:
-            #     pec_center_y = (self.mpsat_sim.cell_size[1]/2 - 
-            #                  (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-            #                  self.pec_thickness/2 + self.y_top_offset)
-            
-            pec_center_y = (self.mpsat_sim.cell_size[1]/2 - 
-                      (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                      self.pec_thickness/2 - self.y_bottom_offset)
-            
-            
-            pec_blocks.append(mp.Block(
-                size=mp.Vector3(pec_width, self.pec_thickness, mp.inf),
-                center=mp.Vector3(pec_center_x, pec_center_y),
-                material=mp.perfect_electric_conductor
-            ))
-        
-        # Left edge PEC backing
-        if "left" in self.edges:
-            # Determine width based on extension settings
-            if self.pec_extends_beyond_substrate and self.add_substrate and self.substrate_extends_beyond_pyramids:
-                pec_y_start = self.y_coverage_start - self.substrate_extension - self.pec_extension
-                pec_y_end = self.y_coverage_end + self.substrate_extension + self.pec_extension
-            elif self.pec_extends_beyond_substrate and self.add_substrate:
-                pec_y_start = self.y_coverage_start - self.pec_extension
-                pec_y_end = self.y_coverage_end + self.pec_extension
-            elif self.pec_extends_beyond_substrate:
-                pec_y_start = self.y_coverage_start - self.pec_extension
-                pec_y_end = self.y_coverage_end + self.pec_extension
-            else:
-                pec_y_start = self.y_coverage_start
-                pec_y_end = self.y_coverage_end
-                
-            pec_width = pec_y_end - pec_y_start
-            pec_center_y = (pec_y_start + pec_y_end) / 2
-            
-            # # FIX: Position PEC between PML boundary and substrate (or pyramids if no substrate)
-            # # PEC should be INSIDE the simulation, not outside
-            # if self.add_substrate:
-            #     # PEC goes between PML and substrate (behind substrate)
-            #     pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-            #                 (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-            #                 self.substrate_thickness - self.pec_thickness/2 + self.x_left_offset)
-            # else:
-            #     # PEC goes between PML and pyramids (no substrate)
-            #     pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-            #                 (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-            #                 self.pec_thickness/2 + self.x_left_offset)
-            
-            pec_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-                        (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                        self.pec_thickness/2 + self.x_left_offset)
-            
-            pec_blocks.append(mp.Block(
-                size=mp.Vector3(self.pec_thickness, pec_width, mp.inf),
-                center=mp.Vector3(pec_center_x, pec_center_y),
-                material=mp.perfect_electric_conductor
-            ))
-        
-        # Right edge PEC backing
-        if "right" in self.edges:
-            # Determine width based on extension settings
-            if self.pec_extends_beyond_substrate and self.add_substrate and self.substrate_extends_beyond_pyramids:
-                pec_y_start = self.y_coverage_start - self.substrate_extension - self.pec_extension
-                pec_y_end = self.y_coverage_end + self.substrate_extension + self.pec_extension
-            elif self.pec_extends_beyond_substrate and self.add_substrate:
-                pec_y_start = self.y_coverage_start - self.pec_extension
-                pec_y_end = self.y_coverage_end + self.pec_extension
-            elif self.pec_extends_beyond_substrate:
-                pec_y_start = self.y_coverage_start - self.pec_extension
-                pec_y_end = self.y_coverage_end + self.pec_extension
-            else:
-                pec_y_start = self.y_coverage_start
-                pec_y_end = self.y_coverage_end
-                
-            pec_width = pec_y_end - pec_y_start
-            pec_center_y = (pec_y_start + pec_y_end) / 2
-            
-            # # FIX: Position PEC INSIDE the simulation, not outside
-            # # PEC goes between PML boundary and absorbers (substrate or pyramids)
-            # if self.add_substrate:
-            #     # PEC between PML and substrate - behind the substrate
-            #     pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-            #                 (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-            #                 self.substrate_thickness + self.pec_thickness/2 + self.x_right_offset)
-            # else:
-            #     # PEC between PML and pyramids - no substrate
-            #     pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-            #                 (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-            #                 self.pec_thickness/2 + self.x_right_offset)
-            
-            pec_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-                        (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                        self.pec_thickness/2 - self.x_left_offset)
-            
-            pec_blocks.append(mp.Block(
-                size=mp.Vector3(self.pec_thickness, pec_width, mp.inf),
-                center=mp.Vector3(pec_center_x, pec_center_y),
-                material=mp.perfect_electric_conductor
-            ))
-        
-        return pec_blocks
-
-    def _create_substrates(self):
-        """
-        Create substrate blocks for all edges
-        
-        Returns
-        -------
-        list
-            List of substrate block objects
-        """
-        substrates = []
-        
-        # Bottom edge substrates
-        if "bottom" in self.edges:
-            if self.substrate_extends_beyond_pyramids:
-                substrate_x_start = self.x_coverage_start - self.substrate_extension
-                substrate_x_end = self.x_coverage_end + self.substrate_extension
-            else:
-                substrate_x_start = self.x_coverage_start
-                substrate_x_end = self.x_coverage_end
-                
-            substrate_width = substrate_x_end - substrate_x_start
-            substrate_center_x = (substrate_x_start + substrate_x_end) / 2
-            
-            # Position substrate after PEC (if present) or after PML
-            if self.add_pec_backing:
-                substrate_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
-                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                                    self.pec_thickness + self.substrate_thickness/2 + self.y_bottom_offset)
-            else:
-                substrate_center_y = (-self.mpsat_sim.cell_size[1]/2 + 
-                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                                    self.substrate_thickness/2 + self.y_bottom_offset)
-            
-            substrates.append(mp.Block(
-                size=mp.Vector3(substrate_width, self.substrate_thickness, mp.inf),
-                center=mp.Vector3(substrate_center_x, substrate_center_y),
-                material=self.substrate_material
-            ))
-        
-        # Top edge substrates
-        if "top" in self.edges:
-            if self.substrate_extends_beyond_pyramids:
-                substrate_x_start = self.x_coverage_start - self.substrate_extension
-                substrate_x_end = self.x_coverage_end + self.substrate_extension
-            else:
-                substrate_x_start = self.x_coverage_start
-                substrate_x_end = self.x_coverage_end
-                
-            substrate_width = substrate_x_end - substrate_x_start
-            substrate_center_x = (substrate_x_start + substrate_x_end) / 2
-
-            # Position substrate after PEC (if present) or after PML
-            if self.add_pec_backing:
-                substrate_center_y = (self.mpsat_sim.cell_size[1]/2 - 
-                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                                    self.pec_thickness - self.substrate_thickness/2 - self.y_bottom_offset)
-            else:
-                substrate_center_y = (self.mpsat_sim.cell_size[1]/2 + 
-                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                                    self.substrate_thickness/2 - self.y_bottom_offset)
-            
-            substrates.append(mp.Block(
-                size=mp.Vector3(substrate_width, self.substrate_thickness, mp.inf),
-                center=mp.Vector3(substrate_center_x, substrate_center_y),
-                material=self.substrate_material
-            ))
-        
-        # Left edge substrates
-        if "left" in self.edges:
-            if self.substrate_extends_beyond_pyramids:
-                substrate_y_start = self.y_coverage_start - self.substrate_extension
-                substrate_y_end = self.y_coverage_end + self.substrate_extension
-            else:
-                substrate_y_start = self.y_coverage_start
-                substrate_y_end = self.y_coverage_end
-                
-            substrate_width = substrate_y_end - substrate_y_start
-            substrate_center_y = (substrate_y_start + substrate_y_end) / 2
-            
-            if self.add_pec_backing:
-                substrate_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                                    self.pec_thickness + self.substrate_thickness/2 + self.x_left_offset)
-            else:
-                substrate_center_x = (-self.mpsat_sim.cell_size[0]/2 + 
-                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) + 
-                                    self.substrate_thickness/2 + self.x_left_offset)
-            
-            substrates.append(mp.Block(
-                size=mp.Vector3(self.substrate_thickness, substrate_width, mp.inf),
-                center=mp.Vector3(substrate_center_x, substrate_center_y),
-                material=self.substrate_material
-            ))
-        
-        # Right edge substrates
-        if "right" in self.edges:
-            if self.substrate_extends_beyond_pyramids:
-                substrate_y_start = self.y_coverage_start - self.substrate_extension
-                substrate_y_end = self.y_coverage_end + self.substrate_extension
-            else:
-                substrate_y_start = self.y_coverage_start
-                substrate_y_end = self.y_coverage_end
-                
-            substrate_width = substrate_y_end - substrate_y_start
-            substrate_center_y = (substrate_y_start + substrate_y_end) / 2
-            
-            if self.add_pec_backing:
-                substrate_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                                    self.pec_thickness - self.substrate_thickness/2 - self.x_left_offset)
-            else:
-                substrate_center_x = (self.mpsat_sim.cell_size[0]/2 - 
-                                    (self.mpsat_sim.factor_dpml*self.mpsat_sim.dpml) - 
-                                    self.substrate_thickness/2 - self.x_left_offset)
-            
-            substrates.append(mp.Block(
-                size=mp.Vector3(self.substrate_thickness, substrate_width, mp.inf),
-                center=mp.Vector3(substrate_center_x, substrate_center_y),
-                material=self.substrate_material
-            ))
-        
-        return substrates
-
-    def _create_pyramids(self):
-        """
-        Create pyramid blocks for all edges
-        
-        Returns
-        -------
-        list
-            List of pyramid block objects
-        """
-        pyramids = []
-        
-        #~ Bottom
-        # Calculate base offset for pyramids based on what exists before them
-        def get_base_offset():
-            offset = self.mpsat_sim.factor_dpml * self.mpsat_sim.dpml
-            if self.add_pec_backing:
-                offset += self.pec_thickness
-            if self.add_substrate:
-                offset += self.substrate_thickness
-            return offset
-    
-        # Bottom edge pyramids (pointing upward)
-        if "bottom" in self.edges:
-            base_offset = get_base_offset()
-
-            for j in range(self.num_pyramids):
-                pyramid_center_x = self.x_coverage_start + (j + 0.5) * self.x_base_width
-                for i in range(self.n_layers):
-                    layer_width = self.calculate_layer_width(i, self.x_base_width)
-                    if layer_width <= 0:
-                        continue  # Skip layers with zero or negative width
-                        
-                    layer_center_y = (-self.mpsat_sim.cell_size[1]/2 + base_offset +
-                                    i * self.layer_thickness + self.layer_thickness/2 + self.y_bottom_offset)
-                    
-                    pyramids.append(mp.Block(
-                        size=mp.Vector3(layer_width, self.layer_thickness, mp.inf),
-                        center=mp.Vector3(pyramid_center_x, layer_center_y),
-                        material=self.material
-                    ))
-        
-        #~ Top
-        # Top edge pyramids (pointing downward)
-        if "top" in self.edges:
-            base_offset = get_base_offset()
-            for j in range(self.num_pyramids):
-                pyramid_center_x = self.x_coverage_start + (j + 0.5) * self.x_base_width
-                for i in range(self.n_layers):
-                    layer_width = self.calculate_layer_width(i, self.x_base_width)
-                    if layer_width <= 0:
-                        continue
-                        
-                    layer_center_y = (self.mpsat_sim.cell_size[1]/2 - base_offset - 
-                                    i * self.layer_thickness - self.layer_thickness/2 + self.y_top_offset)
-                    
-                    pyramids.append(mp.Block(
-                        size=mp.Vector3(layer_width, self.layer_thickness, mp.inf),
-                        center=mp.Vector3(pyramid_center_x, layer_center_y),
-                        material=self.material
-                    ))
-        
-        #~ Left
-        # Left edge pyramids (pointing rightward)
-        if "left" in self.edges:
-            base_offset = get_base_offset()
-            for j in range(self.num_pyramids):
-                pyramid_center_y = self.y_coverage_start + (j + 0.5) * self.y_base_width
-                for i in range(self.n_layers):
-                    layer_width = self.calculate_layer_width(i, self.y_base_width)
-                    if layer_width <= 0:
-                        continue
-                        
-                    layer_center_x = (-self.mpsat_sim.cell_size[0]/2 + base_offset + 
-                                    i * self.layer_thickness + self.layer_thickness/2 + self.x_left_offset)
-                    
-                    pyramids.append(mp.Block(
-                        size=mp.Vector3(self.layer_thickness, layer_width, mp.inf),
-                        center=mp.Vector3(layer_center_x, pyramid_center_y),
-                        material=self.material
-                    ))
-        
-        #~ Right
-        # Right edge pyramids (pointing leftward)
-        if "right" in self.edges:
-            base_offset = get_base_offset()
-            for j in range(self.num_pyramids):
-                pyramid_center_y = self.y_coverage_start + (j + 0.5) * self.y_base_width
-                for i in range(self.n_layers):
-                    layer_width = self.calculate_layer_width(i, self.y_base_width)
-                    if layer_width <= 0:
-                        continue
-                        
-                    layer_center_x = (self.mpsat_sim.cell_size[0]/2 - base_offset -
-                                    i * self.layer_thickness - self.layer_thickness/2 + self.x_right_offset)
-                    
-                    pyramids.append(mp.Block(
-                        size=mp.Vector3(self.layer_thickness, layer_width, mp.inf),
-                        center=mp.Vector3(layer_center_x, pyramid_center_y),
-                        material=self.material
-                    ))
-        
-        return pyramids
     
 
 #~ NEW ABSORBER CLASS SUPPORTING DIFFERENT TYPES OF ABSORBERS
@@ -2949,8 +2684,6 @@ class Absorbers:
 # # ~ FOREBAFFLE CLASS
 
 logger = logging.getLogger(__name__)
-
-
 # * ############################################################################################################
 # * BASE CLASSES - Define abstract base class first
 # * ############################################################################################################
@@ -3029,442 +2762,7 @@ class AbsorberComponent(ForebaffleComponent):
         list of mp.Vector3
             Vertices in counter-clockwise order
         """
-        # Calculate signed area using shoelace formula
-        n = len(vertices)
-        area = 0
-        for i in range(n):
-            j = (i + 1) % n
-            area += vertices[i].x * vertices[j].y
-            area -= vertices[j].x * vertices[i].y
-        
-        # If area is negative, vertices are clockwise - reverse them
-        if area < 0:
-            return list(reversed(vertices))
-        return vertices
-    
-    def _create_base_absorber(self, v1, v2, layer, parent):
-        """Create absorber along the base edge (v1-v2)."""
-        # Base is horizontal in most cases
-        # Offset perpendicular to the base, outward from the triangle
-        
-        # Determine outward direction
-        # For quadrant 1 (0-90°) and 4 (270-360°), offset downward
-        # For quadrant 2 (90-180°) and 3 (180-270°), offset downward still works
-        angle = parent.angle_degrees
-        
-        if 0 <= angle < 180:
-            # Triangle is above base, offset downward
-            offset_y = -layer.thickness
-            offset_x = 0
-        else:
-            # Triangle is below base, offset upward
-            offset_y = layer.thickness
-            offset_x = 0
-        
-        # Create vertices - order matters for MEEP!
-        vertices = [
-            v1,  # Original edge start
-            v2,  # Original edge end
-            mp.Vector3(v2.x + offset_x, v2.y + offset_y),  # Offset edge end
-            mp.Vector3(v1.x + offset_x, v1.y + offset_y),  # Offset edge start
-        ]
-        
-        # Ensure counter-clockwise ordering
-        vertices = self._ensure_ccw_order(vertices)
-        
-        return mp.Prism(
-            vertices=vertices,
-            height=parent.height,
-            axis=mp.Vector3(0, 0, 1),
-            material=layer.get_material()
-        )
-    
-    def _create_height_absorber(self, v2, v3, layer, parent):
-        """Create absorber along the height edge (v2-v3)."""
-        # Height is vertical in most cases
-        angle = parent.angle_degrees
-        
-        if 0 <= angle < 90 or 270 <= angle < 360:
-            # Triangle is to the left of height, offset to the right
-            offset_x = layer.thickness
-            offset_y = 0
-        else:
-            # Triangle is to the right of height, offset to the left
-            offset_x = -layer.thickness
-            offset_y = 0
-        
-        vertices = [
-            v2,  # Original edge start
-            v3,  # Original edge end
-            mp.Vector3(v3.x + offset_x, v3.y + offset_y),  # Offset edge end
-            mp.Vector3(v2.x + offset_x, v2.y + offset_y),  # Offset edge start
-        ]
-        
-        vertices = self._ensure_ccw_order(vertices)
-        
-        return mp.Prism(
-            vertices=vertices,
-            height=parent.height,
-            axis=mp.Vector3(0, 0, 1),
-            material=layer.get_material()
-        )
-    
-    def _create_hypotenuse_absorber(self, v1, v3, v2, layer, parent):
-        """
-        Create absorber along the hypotenuse edge (v1-v3).
-        
-        Parameters
-        ----------
-        v1, v3 : mp.Vector3
-            Endpoints of the hypotenuse
-        v2 : mp.Vector3
-            The right-angle vertex (used to determine outward direction)
-        """
-        # Calculate perpendicular direction
-        dx = v3.x - v1.x
-        dy = v3.y - v1.y
-        length = np.sqrt(dx**2 + dy**2)
-        
-        if length == 0:
-            logger.warning("Zero-length hypotenuse detected")
-            return None
-        
-        # Two possible perpendicular directions (90° rotation)
-        perp_x1 = -dy / length
-        perp_y1 = dx / length
-        
-        # Check which direction points away from v2
-        # Vector from midpoint of hypotenuse to v2
-        mid_x = (v1.x + v3.x) / 2
-        mid_y = (v1.y + v3.y) / 2
-        to_v2_x = v2.x - mid_x
-        to_v2_y = v2.y - mid_y
-        
-        # Dot product tells us if perpendicular points toward or away from v2
-        dot = perp_x1 * to_v2_x + perp_y1 * to_v2_y
-        
-        # If dot product is positive, flip the direction
-        if dot > 0:
-            perp_x1 = -perp_x1
-            perp_y1 = -perp_y1
-        
-        # Apply thickness
-        offset_x = perp_x1 * layer.thickness
-        offset_y = perp_y1 * layer.thickness
-        
-        vertices = [
-            v1,  # Original edge start
-            v3,  # Original edge end
-            mp.Vector3(v3.x + offset_x, v3.y + offset_y),  # Offset edge end
-            mp.Vector3(v1.x + offset_x, v1.y + offset_y),  # Offset edge start
-        ]
-        
-        vertices = self._ensure_ccw_order(vertices)
-        
-        return mp.Prism(
-            vertices=vertices,
-            height=parent.height,
-            axis=mp.Vector3(0, 0, 1),
-            material=layer.get_material()
-        )
-
-#--- FLAIRING ON THE FOREBAFFLE TIP ---#
-@dataclass
-class FlareConfig:
-    """Configuration for a flare extending from a vertex."""
-    # Type of flaring: 
-    # 1. 'linear' - straight line by using mp.Block 
-    # 2. 'spline' - spline function pointing outwards
-    flaring_type: str # Which type of flaring material
-    
-    # The below describes the parameters for each flaring type
-    # 1. linear
-    linear: Dict[str, Any] = field(default_factory=lambda: {
-        "length": 1.0,
-        "thickness": 1.0,
-        "theta2_axis": 'x'
-    })
-    # 2. spline
-    # spline: Dict[str, Any] = field(default_factory=lambda: {
-    #     ""
-    # })
-
-    material: mp.Medium = None # Meep Material
-    epsilon_real: float = 1.0 # Real permittivity
-    epsilon_imag: float = 0.0 # Imaginary permittivity
-    which_vertex: str = 'v3' # From which vertex of the baffle, the user wants to extend the flaring structure (default from the v3)
-    
-    
-
-    def get_material(self, freq: float = 1/3) -> mp.Medium:
-        """Get the material with absorption properties."""
-        if self.material is not None:
-            return self.material
-        return mp.Medium(epsilon=self.epsilon_real, 
-                         D_conductivity=self.epsilon_imag * 2 * np.pi * freq / self.epsilon_real)
-
-class FlairComponent(ForebaffleComponent):
-    """Component representing the flaring structure on the forebaffle tip."""
-    def __init__(self, flairs: List[FlareConfig]):
-        self.flairs = flairs
-        
-    def get_geometry(self, parent_forebaffle) -> List[mp.GeometricObject]:
-        """Generate flair geometries based on parent forebaffle."""
-        geometries = self.create_flairs(parent_forebaffle)
-        return geometries
-    
-    def get_eps_map(self, parent_forebaffle) -> np.ndarray:
-        """Return the epsilon map (flairs don't modify it directly)."""
-        return parent_forebaffle.epsilon_map
-
-    def find_vertex_in_epsilon(self, vertex, parent_forebaffle):
-        """
-        Find the epsilon value at a vertex location in the epsilon map.
-        
-        Parameters
-        ----------
-        vertex : mp.Vector3 or tuple/list
-            Vertex coordinates in real units
-        parent_forebaffle : Forebaffle
-            Parent forebaffle object containing simulation parameters
-            
-        Returns
-        -------
-        float
-            Epsilon value at the vertex location
-            
-        Raises
-        ------
-        ValueError
-            If vertex is outside the epsilon map bounds
-        """
-        # Extract coordinates - handle both mp.Vector3 and tuple/list
-        if isinstance(vertex, mp.Vector3):
-            x, y = vertex.x, vertex.y
-        else:
-            x, y = vertex[0], vertex[1]
-        
-        # Get simulation parameters
-        resolution = parent_forebaffle.mpsat_sim.resolution
-        epsilon_map = parent_forebaffle.epsilon_map
-        
-        # Calculate effective cell size (excluding PML on both sides)
-        pml_thickness = parent_forebaffle.mpsat_sim.factor_dpml * parent_forebaffle.mpsat_sim.dpml
-        xsize = parent_forebaffle.mpsat_sim.cell_size[0] - 4 * pml_thickness
-        ysize = parent_forebaffle.mpsat_sim.cell_size[1] - 4 * pml_thickness
-        
-        # Transform from real coordinates to pixel indices
-        # Real coords: origin at cell center, range [-size/2, +size/2]
-        # Pixel coords: origin at array corner, range [0, size*resolution]
-        x_idx = int((x + xsize / 2) * resolution)
-        y_idx = int((y + ysize / 2) * resolution)
-        
-        # Validate bounds - note: epsilon_map.shape = (rows, cols) = (y_size, x_size)
-        if not (0 <= y_idx < epsilon_map.shape[0] and 
-                0 <= x_idx < epsilon_map.shape[1]):
-            raise ValueError(
-                f"Vertex at ({x:.3f}, {y:.3f}) maps to pixel indices ({x_idx}, {y_idx}), "
-                f"which is outside epsilon map bounds {epsilon_map.shape} (y, x). "
-                f"Valid ranges: y=[0, {epsilon_map.shape[0]-1}], x=[0, {epsilon_map.shape[1]-1}]"
-            )
-        
-        # Access array with [row, col] = [y, x] indexing
-        return epsilon_map[y_idx, x_idx]
-
-    def _get_vertex(self, parent_forebaffle, which_vertex: str):
-        """Get the specified vertex from the parent forebaffle."""
-        v1, v2, v3 = parent_forebaffle.calculate_vertices()
-        vertex_map = {'v1': v1, 'v2': v2, 'v3': v3}
-        
-        if which_vertex not in vertex_map:
-            raise ValueError(f"Invalid vertex '{which_vertex}'. Must be 'v1', 'v2', or 'v3'")
-        
-        return vertex_map[which_vertex]
-
-    def create_flairs(self, parent_forebaffle):
-        """Create all flaring components."""
-        meep_geometry = []
-        
-        # Iterate through all flair configurations
-        for flair_config in self.flairs:
-            vertex = self._get_vertex(parent_forebaffle, flair_config.which_vertex)
-            eps_pixel_at_vertex = self.find_vertex_in_epsilon(vertex, parent_forebaffle)
-            
-            # Check flaring type from the config
-            if flair_config.flaring_type == 'linear':
-                linear_flair = self._create_linear_flair(vertex, eps_pixel_at_vertex, flair_config, parent_forebaffle)
-                meep_geometry.append(linear_flair)
-
-            elif flair_config.flaring_type == 'spline':
-                # self._create_spline_flair(vertex, parent_forebaffle)
-                pass
-            else: 
-                raise ValueError("Please give a valid flairing type")
-        
-        return meep_geometry  # Return only the geometry list, not a tuple
-    
-    def _create_linear_flair(self, vertex, eps_pixel_at_vertex, flair_config, parent_fb):
-        """Create a linear flair extending from the specified vertex."""
-        res = parent_fb.mpsat_sim.resolution
-        characteristic_length = 1 #mm
-        unit_pixel_length = characteristic_length / res
-        linear_params = flair_config.linear
-        length = linear_params["length"]
-        thickness = linear_params["thickness"]
-        theta2 = linear_params["theta2"]
-        theta2_axis = linear_params["theta2_axis"]
-        flair_material = flair_config.get_material()
-
-        # # Calculate the center of the MEEP block using sin-cos approach depending on the rotation axis
-        # if theta2_axis == 'x':
-        #     x_center = vertex.x + thickness * math.cos(theta2)
-        #     y_center = vertex.y + thickness * math.sin(theta2) 
-        # elif theta2_axis == 'y':
-        #     x_center = vertex.x + thickness * math.sin(theta2)
-        #     y_center = vertex.y + thickness * math.cos(theta2)
-        # else:
-        #     raise ValueError("Invalid rotation axis. Must be 'x' or 'y'.")
-
-        angle_rad = math.radians(theta2) if isinstance(theta2, (int, float)) else theta2
-        
-        if theta2_axis == 'x':
-            offset_x = length/2 * math.cos(angle_rad)
-            offset_y = length/2 * math.sin(angle_rad)
-        elif theta2_axis == 'y':
-            offset_x = length/2 * math.sin(angle_rad)
-            offset_y = length/2 * math.cos(angle_rad)
-
-        if theta2<=90:
-            offset_vertex_x = thickness/2 * math.cos(90)
-            offset_vertex_y = thickness/2 * math.sin(90)
-            
-            new_vertex = vertex
-            new_vertex.x = vertex.x - offset_vertex_x
-            new_vertex.y = vertex.y - offset_vertex_y
-            
-            x_center = new_vertex.x + offset_x -unit_pixel_length 
-            y_center = new_vertex.y + offset_y -unit_pixel_length
-
-        elif 90< theta2 < 180:
-            offset_vertex_x = thickness/2 * -math.cos(90)
-            offset_vertex_y = thickness/2 * math.sin(90)
-            
-            new_vertex = vertex
-            new_vertex.x = vertex.x - offset_vertex_x
-            new_vertex.y = vertex.y - offset_vertex_y
-
-            x_center = new_vertex.x + offset_x +unit_pixel_length
-            y_center = new_vertex.y + offset_y +unit_pixel_length
-
-        # x_center = vertex.x + offset_x +unit_pixel_length 
-        # y_center = vertex.y + offset_y +unit_pixel_length
-        # Use meep_block from
-        import meepsat.meep_geometry as mpsat_geom
-
-        # x_center, y_center = x_center - thickness, y_center #- thickness
-        flair_block_meep = mpsat_geom.meep_block(size = mp.Vector3(length, thickness, 0),
-                                                 center = mp.Vector3(x_center, y_center, 0),
-                                                 material = flair_material,
-                                                 angle= theta2,
-                                                 rot_axis= 'z') # This will be always Z
-
-        return flair_block_meep
-    
-# * ############################################################################################################
-# * MAIN FOREBAFFLE CLASS
-# * ############################################################################################################
-
-logger = logging.getLogger(__name__)
-# * ############################################################################################################
-# * BASE CLASSES - Define abstract base class first
-# * ############################################################################################################
-
-class ForebaffleComponent(ABC):
-    """Abstract base class for forebaffle components."""
-    
-    @abstractmethod
-    def get_geometry(self, parent_forebaffle) -> List[mp.GeometricObject]:
-        """Return MEEP geometric objects for this component."""
-        pass
-    
-    # @abstractmethod
-    # def get_eps_map(self, parent_forebaffle) -> np.ndarray:
-    #     """Return the epsilon map for this component."""
-    #     pass
-
-
-# * ############################################################################################################
-# * DATACLASSES - Configuration classes
-# * ############################################################################################################
-
-# Absorbers over Forebaffle sides - base, height, hypotenuse 
-@dataclass
-class AbsorberLayer:
-    """Configuration for an absorber layer on a forebaffle side."""
-    side: Literal['base', 'height', 'hypotenuse']
-    thickness: float
-    material: mp.Medium = None
-    epsilon_real: float = 1.0
-    epsilon_imag: float = 0.0
-    
-    def get_material(self, freq: float = 1/3) -> mp.Medium:
-        """Get the material with absorption properties."""
-        if self.material is not None:
-            return self.material
-        return mp.Medium(epsilon=self.epsilon_real, 
-                         D_conductivity=self.epsilon_imag * 2 * np.pi * freq / self.epsilon_real)
-
-
-class AbsorberComponent(ForebaffleComponent):
-    """Component that adds absorber layers to forebaffle sides."""
-    
-    def __init__(self, absorber_layers: List[AbsorberLayer]):
-        self.absorber_layers = absorber_layers
-    
-    def get_geometry(self, parent_forebaffle) -> List[mp.GeometricObject]:
-        """Generate absorber layer geometries based on parent forebaffle."""
-        geometries = []
-        v1, v2, v3 = parent_forebaffle.calculate_vertices()
-        
-        for layer in self.absorber_layers:
-            if layer.side == 'base':
-                geom = self._create_base_absorber(v1, v2, layer, parent_forebaffle)
-            elif layer.side == 'height':
-                geom = self._create_height_absorber(v2, v3, layer, parent_forebaffle)
-            elif layer.side == 'hypotenuse':
-                geom = self._create_hypotenuse_absorber(v1, v3, v2, layer, parent_forebaffle)
-            
-            if geom:
-                geometries.append(geom)
-        
-        return geometries
-    
-    def _ensure_ccw_order(self, vertices):
-        """
-        Ensure vertices are in counter-clockwise order using the shoelace formula.
-        
-        Parameters
-        ----------
-        vertices : list of mp.Vector3
-            List of vertices to check
-            
-        Returns
-        -------
-        list of mp.Vector3
-            Vertices in counter-clockwise order
-        """
-        # Calculate signed area using shoelace formula
-        n = len(vertices)
-        area = 0
-        for i in range(n):
-            j = (i + 1) % n
-            area += vertices[i].x * vertices[j].y
-            area -= vertices[j].x * vertices[i].y
-        
-        # If area is negative, vertices are clockwise - reverse them
-        if area < 0:
-            return list(reversed(vertices))
-        return vertices
+        return ensure_ccw_order(vertices)
     
     def _create_base_absorber(self, v1, v2, layer, parent):
         """Create absorber along the base edge (v1-v2)."""
@@ -3889,7 +3187,8 @@ class Forebaffle(object):
         spline_smoothing: float, optional (only needed if shape = 'spline')
             Smoothing factor for the spline (default: 1)
         fb_thickness: float, optional
-            Thickness of the forebaffle (default: 10)
+            Thickness of the forebaffle wall, measured perpendicular to the
+            wall surface, so it is independent of the baffle angle (default: 10)
         add_absorber: bool, optional
             Whether to add an absorber layer (default: True)
         absorber_side: str or list of str, optional
@@ -3906,7 +3205,8 @@ class Forebaffle(object):
         absorber_epsilon_imag: float, optional
             Imaginary part of the permittivity for the absorber (default: 0)
         absorber_thickness: float, optional
-            Thickness of the absorber layer (default: 2.0)
+            Thickness of the absorber layer, measured perpendicular to the wall
+            surface, so it is independent of the baffle angle (default: 2.0)
         '''
         self.mpsat_sim = mpsat_sim
         self.epsilon_map = epsilon_map
@@ -4147,9 +3447,27 @@ class Forebaffle(object):
         y_periodic = y_periodic + offset_correction
 
         # Create smooth spline
-        spline = UnivariateSpline(x_points, y_periodic, k=self.spline_degree, 
+        spline = UnivariateSpline(x_points, y_periodic, k=self.spline_degree,
                                 s=self.spline_smoothing)
-        
+
+        # Wall/absorber offsets follow the local surface normal, not +/-y. A
+        # vertical offset would shrink the true perpendicular thickness by
+        # cos(wall angle), so a steep baffle would end up a fraction of its
+        # nominal fb_thickness (and its absorber a fraction of a pixel).
+        spline_derivative = spline.derivative()
+
+        def normal_at(x):
+            """Unit normal to the spline at x, oriented toward +y."""
+            slope = float(spline_derivative(x))
+            norm = np.hypot(1.0, slope)
+            return -slope / norm, 1.0 / norm
+
+        def tangent_at(x):
+            """Unit tangent to the spline at x, oriented toward +x."""
+            slope = float(spline_derivative(x))
+            norm = np.hypot(1.0, slope)
+            return 1.0 / norm, slope / norm
+
         # Create prism objects
         geometries = []
         thickness = self.spline_fb_thickness
@@ -4175,13 +3493,19 @@ class Forebaffle(object):
             # Evaluate spline at segment endpoints
             y1 = float(spline(x1))
             y2 = float(spline(x2))
-            
+
+            # Offset each endpoint along its own normal, so neighbouring
+            # segments share an edge exactly and no gaps open up along the wall
+            nx1, ny1 = normal_at(x1)
+            nx2, ny2 = normal_at(x2)
+            half = thickness / 2
+
             # Create a quadrilateral prism for this segment
             # Vertices at top and bottom of the segment
-            v1_bottom = mp.Vector3(x1, y1 - thickness/2)
-            v2_bottom = mp.Vector3(x2, y2 - thickness/2)
-            v2_top = mp.Vector3(x2, y2 + thickness/2)
-            v1_top = mp.Vector3(x1, y1 + thickness/2)
+            v1_bottom = mp.Vector3(x1 - nx1*half, y1 - ny1*half)
+            v2_bottom = mp.Vector3(x2 - nx2*half, y2 - ny2*half)
+            v2_top = mp.Vector3(x2 + nx2*half, y2 + ny2*half)
+            v1_top = mp.Vector3(x1 + nx1*half, y1 + ny1*half)
             
             # Create prism (quadrilateral)
             prism = mp.Prism(
@@ -4213,14 +3537,19 @@ class Forebaffle(object):
                 
                 y1 = float(spline(x1))
                 y2 = float(spline(x2))
-                
+
+                nx1, ny1 = normal_at(x1)
+                nx2, ny2 = normal_at(x2)
+                half = thickness / 2
+                outer = half + absorber_thickness
+
                 if 'above' in self.spline_absorber_side:
                     # Absorber above
-                    v1_inner = mp.Vector3(x1, y1 + thickness/2)
-                    v2_inner = mp.Vector3(x2, y2 + thickness/2)
-                    v2_outer = mp.Vector3(x2, y2 + thickness/2 + absorber_thickness)
-                    v1_outer = mp.Vector3(x1, y1 + thickness/2 + absorber_thickness)
-                    
+                    v1_inner = mp.Vector3(x1 + nx1*half, y1 + ny1*half)
+                    v2_inner = mp.Vector3(x2 + nx2*half, y2 + ny2*half)
+                    v2_outer = mp.Vector3(x2 + nx2*outer, y2 + ny2*outer)
+                    v1_outer = mp.Vector3(x1 + nx1*outer, y1 + ny1*outer)
+
                     absorber_prism = mp.Prism(
                         vertices=[v1_inner, v2_inner, v2_outer, v1_outer],
                         height=self.height,
@@ -4231,10 +3560,10 @@ class Forebaffle(object):
                 
                 if 'below' in self.spline_absorber_side:
                     # Absorber below
-                    v1_outer = mp.Vector3(x1, y1 - thickness/2 - absorber_thickness)
-                    v2_outer = mp.Vector3(x2, y2 - thickness/2 - absorber_thickness)
-                    v2_inner = mp.Vector3(x2, y2 - thickness/2)
-                    v1_inner = mp.Vector3(x1, y1 - thickness/2)
+                    v1_outer = mp.Vector3(x1 - nx1*outer, y1 - ny1*outer)
+                    v2_outer = mp.Vector3(x2 - nx2*outer, y2 - ny2*outer)
+                    v2_inner = mp.Vector3(x2 - nx2*half, y2 - ny2*half)
+                    v1_inner = mp.Vector3(x1 - nx1*half, y1 - ny1*half)
 
                     absorber_prism = mp.Prism(
                         vertices=[v1_outer, v2_outer, v2_inner, v1_inner],
@@ -4251,22 +3580,26 @@ class Forebaffle(object):
                 geometries.append(self._create_end_cap_absorber(
                     x_edge=x_start, y_edge=float(spline(x_start)),
                     thickness=thickness, absorber_thickness=absorber_thickness,
-                    absorber_material=absorber_material, direction=-1))
+                    absorber_material=absorber_material, direction=-1,
+                    normal=normal_at(x_start), tangent=tangent_at(x_start)))
 
             if 'end_cap' in self.spline_absorber_side:
                 geometries.append(self._create_end_cap_absorber(
                     x_edge=x_end, y_edge=float(spline(x_end)),
                     thickness=thickness, absorber_thickness=absorber_thickness,
-                    absorber_material=absorber_material, direction=1))
+                    absorber_material=absorber_material, direction=1,
+                    normal=normal_at(x_end), tangent=tangent_at(x_end)))
 
         return geometries
 
     def _create_end_cap_absorber(self, x_edge, y_edge, thickness, absorber_thickness,
-                                  absorber_material, direction):
+                                  absorber_material, direction, normal, tangent):
         """
         Cap the exposed short edge at one end of the spline wall with an absorber
         block, extending outward from (x_edge, y_edge) by `absorber_thickness`
-        along x (`direction` = -1 for the start edge, +1 for the end edge).
+        along the wall's tangent (`direction` = -1 for the start edge, +1 for the
+        end edge). The cap spans the wall cross-section along `normal`, so it
+        stays flush with the face absorbers whatever the wall angle.
 
         Spans the full above/below stack when those sides are also active, so
         there's no bare gap at the corner where a cap meets a face absorber.
@@ -4276,13 +3609,19 @@ class Forebaffle(object):
         half_below = thickness / 2 + (
             absorber_thickness if 'below' in self.spline_absorber_side else 0)
 
-        x_outer = x_edge + direction * absorber_thickness
+        nx, ny = normal
+        tx, ty = tangent
+        off_x = direction * absorber_thickness * tx
+        off_y = direction * absorber_thickness * ty
+
+        low_x, low_y = x_edge - nx*half_below, y_edge - ny*half_below
+        high_x, high_y = x_edge + nx*half_above, y_edge + ny*half_above
 
         vertices = [
-            mp.Vector3(x_edge, y_edge - half_below),
-            mp.Vector3(x_outer, y_edge - half_below),
-            mp.Vector3(x_outer, y_edge + half_above),
-            mp.Vector3(x_edge, y_edge + half_above),
+            mp.Vector3(low_x, low_y),
+            mp.Vector3(low_x + off_x, low_y + off_y),
+            mp.Vector3(high_x + off_x, high_y + off_y),
+            mp.Vector3(high_x, high_y),
         ]
 
         return mp.Prism(

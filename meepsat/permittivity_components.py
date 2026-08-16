@@ -3230,7 +3230,7 @@ class Mirror(object):
     @classmethod
     def plot_epsilon_map(cls, eps_map, mirrors, extra_zemax_points=None,
                          savepath=None, show=False, title=None,
-                         mark_centre=True):
+                         mark_centre=True, return_points=False, show_centre_points=True):
         """
         Plot an epsilon map in MEEP centred coordinates.
 
@@ -3242,10 +3242,11 @@ class Mirror(object):
             mirrors: Iterable of Mirror objects; the first sets the extent
             extra_zemax_points: Optional dict of label -> (y, z) ZEMAX points
             savepath, show, title, mark_centre: Figure handling
+            return_points: If True, return the points used for plotting
         """
         mirrors = list(mirrors)
         ref = mirrors[0]
-
+        
         fig, ax = plt.subplots(figsize=(12, 10))
         # .real because MeepSAT maps are complex when a component is lossy
         im = ax.imshow(np.real(eps_map).T, extent=ref.extent, origin='lower',
@@ -3253,18 +3254,19 @@ class Mirror(object):
 
         for mirror in mirrors:
             cu, cv = mirror.centre_meep
-            ax.scatter(cu, cv, s=80, c='white', marker='x', zorder=5)
+            ax.scatter(cu, cv, s=80, c='white', marker='x', zorder=5, label=mirror.name + f"({cu:.1f}, {cv:.1f})")
             ax.text(cu, cv, f'  {mirror.name}', fontsize=11, color='white')
 
         for label, point in (extra_zemax_points or {}).items():
             pu, pv = ref.from_zemax(*point)
-            ax.scatter(pu, pv, s=80, c='white', marker='x', zorder=5)
+            ax.scatter(pu, pv, s=80, c='white', marker='x', zorder=5, label=label + f"({pu:.1f}, {pv:.1f})")
             ax.text(pu, pv, f'  {label}', fontsize=11, color='white')
 
         if mark_centre:
             ax.axhline(0, color='white', linewidth=0.6, alpha=0.4)
             ax.axvline(0, color='white', linewidth=0.6, alpha=0.4)
             ax.scatter(0, 0, s=90, c='white', marker='+', zorder=6)
+            
 
         plt.colorbar(im, ax=ax, label='Permittivity')
         ax.set_xlabel('X MEEP (mm, centred on the cell)', fontsize=12)
@@ -3274,6 +3276,9 @@ class Mirror(object):
                      fontsize=14, fontweight='bold')
         ax.set_aspect('equal')
 
+        if show_centre_points:
+            ax.legend(loc='upper right', fontsize=10, framealpha=0.7, edgecolor='white')
+        
         plt.tight_layout()
         if savepath:
             cls._ensure_dir(savepath)
@@ -3282,6 +3287,16 @@ class Mirror(object):
             plt.show()
         plt.close()
 
+        if return_points:
+            points = {}
+            for mirror in mirrors:
+                points[mirror.name] = mirror.centre_meep
+            if extra_zemax_points:
+                for label, point in extra_zemax_points.items():
+                    points[label] = ref.from_zemax(*point)
+            return points    
+    
+    
     def __repr__(self):
         return (f'Mirror({self.name!r}, centre_zemax_mm='
                 f'({self.centre_zemax_mm[0]:.2f}, {self.centre_zemax_mm[1]:.2f}), '
