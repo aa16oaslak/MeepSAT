@@ -290,7 +290,7 @@ def meepsat_farfield(efield,
     fft_freq = np.fft.fftshift(fft_freq)
 
     # Calculate angles in degrees
-    theta_rad = np.arctan(fft_freq * wavelength)
+    theta_rad = np.arcsin(fft_freq * wavelength) #np.arctan(fft_freq * wavelength)
     theta_deg = theta_rad * (180 / np.pi)
 
     # Calculate the FFTs of efield
@@ -2286,6 +2286,7 @@ def ntff_2d(contour, wavelength, angles_deg, eta=1.0, angle_chunk=256):
         integrand = ez[:, None] * ndotr - eta * jz[:, None]
         F[a:a + angle_chunk] = (integrand * np.exp(-1j * k * proj)).sum(axis=0) * dl
     return F
+
 
 
 def farfield_1d_slice(ez_line, y_coords, wavelength, y_max=None,

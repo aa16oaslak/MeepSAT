@@ -25,12 +25,9 @@ import meepsat.helpers as exf
 import warnings
 warnings.filterwarnings("ignore")
 
-#!================================================================================================
 
 """
-Step Functions for Animations and Monitor Data Collection 
-#! IMPORTANT 
-NOTE: Monitor data collection functions are at the bottom and need to be properly checked before publishing.
+Step Functions for Animations and Data Extraction in MEEPSAT Simulation Framework
 """
 
 # Initialising global variables for animation parameters
@@ -299,32 +296,7 @@ class Animate2DArray:
         # modified from matplotlib library
         w, h = fig.get_size_inches()
         return int(w * fig.dpi), int(h * fig.dpi)
-    
-    #! THIS IS THE OLD CODE
-    # def grab_frame(self,
-    #                fig= None,
-    #                ax= None,
-    #                elapsed= 0,
-    #                frame_format= 'png'):
-    #     """
-    #     Captures the current frame of the given figure and saves it to memory.
-    #         Parameters:
-    #             fig (matplotlib.figure.Figure, optional): The figure object to capture. Defaults to None.
-    #             ax (matplotlib.axes.Axes, optional): The axes object of the figure. Defaults to None.
-    #             elapsed (int, optional): The elapsed time or timestep for the frame being captured. Defaults to 0.
-    #         Returns:
-    #             None
-    #     """
-    #     # Saves the figures frame to memory.
-    #     # modified from matplotlib library
-    #     from io import BytesIO
 
-    #     bin_data = BytesIO()
-    #     fig.savefig(bin_data, format=frame_format)
-    #     print('PNG added to the bindata for timestep:', elapsed)
-    #     # imgdata64 = base64.encodebytes(bin_data.getvalue()).decode('ascii')
-    #     self._saved_frames.append(bin_data.getvalue())  # Use instance variable
-    
     def grab_frame(self,
                 fig=None,
                 ax=None,
@@ -537,12 +509,9 @@ class Animate2DArray:
                 except Exception as e:
                     print(f"Error running FFmpeg: {e}")
 
-#!================================================================================================
-#!================================================================================================
-"""
-divide three: mp.at_beginning, mp.at_every, mp.at_end
 
-All functions should accept only sim as an argument
+"""
+divide three: mp.at_beginning, mp.at_every, mp.at_end: All functions should accept only sim as an argument
 """
 
 # Define all field components with custom suffixes for each type
@@ -612,8 +581,6 @@ def save_animation(sim):
     print("All animations saved and memory cleaned up.")
     return
 
-
-# @profile
 def E_field_power_dB(sim, component, component_name, func_name=None):
     """
     Generic function to process field power in dB for any field component.
@@ -737,143 +704,7 @@ def E_field_power_dB(sim, component, component_name, func_name=None):
     
     return
 
-#!================================================================================================
-#!================================================================================================
-#!================================================================================================
-# Monitor data collection functions
-
-# Global registry to store monitor configurations
-VOLUME_MONITOR_REGISTRY = {}
-
-def set_volume_monitor_registry(monitor_list, 
-                                monitor_data_save_dir= None,
-                                monitor_data_save_freq = None):
-    """
-    Update the registry with monitor configurations from simulation_2D.py
-    
-    Args:
-        monitor_list: List of monitor dictionaries from simulation_2D.py
-    """
-    global VOLUME_MONITOR_REGISTRY
-    global volume_monitor_data_save_dir
-    global volume_monitor_data_save_freq
-
-    volume_monitor_data_save_dir = monitor_data_save_dir
-    volume_monitor_data_save_freq = monitor_data_save_freq
-
-
-    if monitor_list:
-        for monitor_entry in monitor_list:
-            name = list(monitor_entry.keys())[0]
-            meep_monitor = monitor_entry[name][1]  # Second element contains the monitor object
-            # Store monitor configuration data
-            monitor_config = monitor_entry[name][0]  # First element contains the configuration
-            VOLUME_MONITOR_REGISTRY[name] = monitor_config
-            VOLUME_MONITOR_REGISTRY[name]["MONITOR_OBJECT"] = meep_monitor
-            if monitor_data_save_dir:
-                VOLUME_MONITOR_REGISTRY[name]["MONITOR_DATA_DIR"] = monitor_data_save_dir
-                
-            print(f"Registered monitor: {name}")
-
-    
-#!  Volume monitor components
-VOLUME_MONITOR_COMPONENTS = [
-    {"func_name": "Ez2_dB_VolumeMonitor", "component": mp.Ez, "display_name": "Ez"},
-    {"func_name": "Ey2_dB_VolumeMonitor", "component": mp.Ey, "display_name": "Ey"},
-    {"func_name": "Ex2_dB_VolumeMonitor", "component": mp.Ex, "display_name": "Ex"}
-    # Add more components as needed
-]
-    
-def create_volume_monitor_func(component, display_name):
-    def volume_monitor_func(sim):
-        global VOLUME_MONITOR_REGISTRY
-        print("***"*10)
-        print(f"Computing {display_name}² in dB at monitor locations at time {sim.meep_time()}")
-
-        # Initialize storage directory
-        if volume_monitor_data_save_dir:
-            output_dir = volume_monitor_data_save_dir + '/volume_monitor_data'
-            os.makedirs(output_dir, exist_ok=True)
-        else:
-            output_dir = 'volume_monitor_data'
-            os.makedirs(output_dir, exist_ok=True)
-
-        for monitor_name, monitor_config in VOLUME_MONITOR_REGISTRY.items():
-            monitor_obj = monitor_config.get("MONITOR_OBJECT")
-            # print(f"Processing monitor: {monitor_name}")
-            # print(f"Monitor object: {monitor_obj}")
-            # print(f"Monitor config: {monitor_config}")
-
-            if monitor_obj is None:
-                raise ValueError(f"Monitor {monitor_name} has no MEEP object")
-            
-            try:
-                # Get field data directly from the monitor volume
-                field_data = sim.get_array(component=component, 
-                                            vol=monitor_obj)
-                
-                # print(f"Field data shape: {field_data.shape}")
-                # Calculate power in dB
-                power = field_data**2
-                with np.errstate(divide='ignore'):  # Handle log of zero
-                    power_db = 10 * np.log10(power)
-                    power_db = np.where(np.isfinite(power_db), power_db, -100)
-                
-                # Save data directly to disk instead of keeping it in memory
-                # Only save every Nth timestep to reduce storage
-                current_time = sim.meep_time()
-                save_frequency = volume_monitor_data_save_freq  # Adjust this number to save less frequently
-                
-                if current_time % save_frequency < 1:  # Save only periodically
-                    timestep = int(current_time)
-                    filename = f"{output_dir}/{display_name}2_{monitor_name}_step{timestep}.npz"
-                    
-                    # Save using compressed format with metadata
-                    np.savez_compressed(
-                        filename, 
-                        time=current_time,
-                        power_db=power_db,
-                        component=display_name,
-                        monitor_name=monitor_name
-                    )
-                    
-                    print(f"Saved {display_name}² data for monitor '{monitor_name}' at time {current_time}")
-                
-            except Exception as e:
-                print(f"Error processing monitor '{monitor_name}': {str(e)}")
-            
-
-
-        return # Dummy function for now
-    
-    return volume_monitor_func
-
-# Dynamically create all volume monitor functions
-for component_info in VOLUME_MONITOR_COMPONENTS:
-    # Create the function with proper naming
-    func = create_volume_monitor_func(
-        component_info["component"],
-        component_info["display_name"]
-    )
-    func.__name__ = component_info["func_name"]
-    
-    # Add function to globals with appropriate name
-    globals()[component_info["func_name"]] = func
-    
-    # Initialize any needed attributes
-    globals()[component_info["func_name"]].data = []  # For storing monitor data
-    
-
-#!================================================================================================ 
-#!================================================================================================
-#!================================================================================================
-
-
-#! ================================================================================================
-#! ================================================================================================
-#! ================================================================================================
-# Field StepFunctions
-
+# Data Extraction StepFunctions
 # Set global parameters for field step extraction functions
 def set_field_params(field_params: dict):
     """
@@ -1065,8 +896,3 @@ def save_accumulated_fields(simulation):
         hz_imag=np.imag(Hz_avg),
         count=count
     )
-
-#! ================================================================================================
-#! ================================================================================================
-#! ================================================================================================
-    
