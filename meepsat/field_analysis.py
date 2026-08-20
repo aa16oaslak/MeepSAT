@@ -768,7 +768,7 @@ def load_h5_data(file_path):
         data = {key: f[key][()] for key in f.keys()}
     return data
 
-def readHDF5_recursive(file_path):
+def load_h5_data_recursive(file_path):
     """
     Reads an HDF5 file and return the data.
     Handles both simple keys and nested group structures.
