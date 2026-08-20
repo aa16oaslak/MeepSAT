@@ -2042,62 +2042,6 @@ def convert_grasp_to_dict(data):
 #         return freq, FFTs
     
 
-def efield_list_from_monitors_from_lens1(current_dir, freq_folder_array, time_array, file_format, resolution='10'):
-    """
-    Function to extract electric field data from multiple .npz files based on the provided time samples.
-
-    Parameters:
-    freq_folder_array (np.ndarray): Array of frequency folder names.
-    time_array (list): List of time arrays, one for each frequency.
-    file_format (str): Format string for the .npz files, e.g., 'lens1_1mm_power_time_i.npz'.
-
-    Returns:
-    list of dict: List of dictionaries containing electric field data for each frequency.
-    """
-    
-    # list of dictionaries
-    efield_list = []
-    
-    # Adding output_files to the current directory
-    current_dir = os.path.join(current_dir, 'output_files', resolution)
-    
-    # Processing each frequency sample
-    for i, freq in enumerate(freq_folder_array):
-        print(f"Processing frequency folder: {freq}")
-        base_dir = os.path.join(current_dir, freq)
-        print(f"Base directory set to: {base_dir}")
-        efield_list_for_freq = []
-        
-        # Get the time array for this specific frequency
-        freq_time_array = time_array[i] if i < len(time_array) else []
-        print(f"Time samples for {freq}: {freq_time_array}")
-    
-        # Processing each time sample    
-        for t in freq_time_array:
-            # Replace time_i with the actual time sample in the file name
-            file_name = file_format.replace('time_i', t)
-            #print(f"Loading file: {file_name}")
-            file_path = os.path.join(base_dir, file_name)
-            
-            if os.path.exists(file_path):
-                data = load_npz_data(file_path)
-                efield = data['field']
-                # Creating a list of efield arrays
-                efield_list_for_freq.append(efield)
-            else:
-                print(f"File {file_path} does not exist.")
-        
-        # Creating a dictionary for the current frequency
-        freq_dict = {
-            'frequency': freq,
-            'efield_list': efield_list_for_freq,
-            'y_coords': data['y_coords'] if 'data' in locals() and 'y_coords' in data else None
-        }
-        efield_list.append(freq_dict)
-        
-    return efield_list
-
-
 #==================================================================================
 #=========POST SIMULATION UTILITIES================================================
 #==================================================================================
