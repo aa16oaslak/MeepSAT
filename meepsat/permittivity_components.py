@@ -1274,8 +1274,8 @@ class AsphericLens(object):
             # x_left_pos_meep = (x_left_pos / res) - ((self.size_x) / 2)  - self.dpml/4 #! managed somehow
             # x_right_neg_meep = (x_right_neg / res) - ((self.size_x) / 2)  - self.dpml/4 #! managed somehow
             # x_right_pos_meep = (x_right_pos / res) - ((self.size_x) / 2)  - self.dpml/4#! managed somehow
-            # y_negative_meep = (y_negative / res) - ((self.size_y) / 2)  - self.dpml/2 #!fucking working 
-            # y_positive_meep = (y_positive / res) - ((self.size_y) / 2)  - self.dpml/2 #!fucking working
+            # y_negative_meep = (y_negative / res) - ((self.size_y) / 2)  - self.dpml/2 #! working 
+            # y_positive_meep = (y_positive / res) - ((self.size_y) / 2)  - self.dpml/2 #! working
 
             #if not np.isclose(np.around(y_negative_meep, 2), 0.0):
             left_surface_coords.append((x_left_neg_meep, y_negative_meep))
