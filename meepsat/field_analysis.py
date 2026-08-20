@@ -750,7 +750,25 @@ def plot_aperture_power_profiles(
             plt.savefig(savepath)
         plt.show()
 
-def readHDF5(file_path):
+
+#==========================================================================================================
+
+def load_npz_data(file_path):
+    """
+    Function to load data from a .npz file.
+    """
+    data = np.load(file_path)
+    return data
+
+def load_h5_data(file_path):
+    """
+    Function to load data from a .h5 file.
+    """
+    with h5py.File(file_path, 'r') as f:
+        data = {key: f[key][()] for key in f.keys()}
+    return data
+
+def readHDF5_recursive(file_path):
     """
     Reads an HDF5 file and return the data.
     Handles both simple keys and nested group structures.
@@ -776,213 +794,6 @@ def readHDF5(file_path):
         data = {}
         data = read_recursive(f, data)
     return data
-
-
-def plot_grasp_meep_comparison(grasp_aperture_data, averaged_aperture_data, last_timestep_aperture_data,
-                               frequency='90.0', aperture_size_mm=50, plot_type='moving_average',
-                               sampling_factor=5, window_size=3, 
-                               plot_params=None, show_avg=True, show_last_timestep=True):
-    """
-    Plot comparison between GRASP and MEEP aperture data for specified frequency.
-    
-    Parameters:
-    -----------
-    grasp_aperture_data : dict
-        GRASP data loaded from HDF5 file
-    averaged_aperture_data : list
-        Time-averaged MEEP aperture data
-    last_timestep_aperture_data : list
-        Last timestep MEEP aperture data
-    frequency : str
-        Frequency to plot (e.g., '90.0' for 90 GHz)
-    aperture_size_mm : float
-        Aperture size in mm for GRASP y-axis scaling
-    plot_type : str
-        Type of plot: 'raw', 'sampled', 'moving_average'
-    sampling_factor : int
-        Factor for sampling every N points (used when plot_type='sampled')
-    window_size : int
-        Window size for moving average (used when plot_type='moving_average')
-    plot_params : dict
-        Dictionary with plotting parameters (figsize, colors, linestyles, etc.)
-    show_avg : bool
-        Whether to show time-averaged MEEP data
-    show_last_timestep : bool
-        Whether to show last timestep MEEP data
-    
-    Returns:
-    --------
-    fig, ax : matplotlib figure and axis objects
-    """
-    
-    # Default plotting parameters
-    default_params = {
-        'figsize': (10, 6),
-        'meep_avg_color': 'blue',
-        'meep_last_color': 'cyan',
-        'grasp_color': 'red',
-        'meep_avg_linestyle': '-',
-        'meep_last_linestyle': '--',
-        'grasp_linestyle': '--',
-        'ylim': (-5, 0),
-        'xlabel': 'Position (mm)',
-        'ylabel': 'Normalized Power (dB)',
-        'title_prefix': 'Aperture Power Profile Comparison at',
-        'grid': True,
-        'legend': True
-    }
-    
-    # Update default parameters with user-provided ones
-    if plot_params:
-        default_params.update(plot_params)
-    
-    # Process GRASP data
-    freq_key = frequency.split('.')[0]  # Convert '90.0' to '90'
-    if freq_key not in grasp_aperture_data:
-        raise ValueError(f"Frequency {freq_key} not found in GRASP data. Available: {list(grasp_aperture_data.keys())}")
-    
-    ez_grasp = grasp_aperture_data[freq_key]['Ez']
-    ex_grasp = grasp_aperture_data[freq_key]['Ex']
-    ey_grasp = grasp_aperture_data[freq_key]['Ey']
-    e_grasp = np.sqrt(np.abs(ez_grasp)**2 + np.abs(ex_grasp)**2 + np.abs(ey_grasp)**2)
-    
-    # Extract middle row and convert to dB
-    mid_row_index = e_grasp.shape[0] // 2
-    mid_row_e = e_grasp[mid_row_index, :]
-    amplitude_e = np.abs(mid_row_e)**2
-    amplitude_e_norm = amplitude_e / np.max(amplitude_e)
-    amplitude_e_db = 10 * np.log10(amplitude_e_norm + 1e-12)
-    y_grasp = np.linspace(-aperture_size_mm/2, aperture_size_mm/2, len(amplitude_e_db))
-    
-    # Create plot
-    fig, ax = plt.subplots(figsize=default_params['figsize'])
-    
-    # Find and plot MEEP data for specified frequency
-    freq_label = f'freq_{frequency}GHz'
-    meep_data_found = False
-    
-    for data, last_timestep_data in zip(averaged_aperture_data, last_timestep_aperture_data):
-        if data['frequency'] == freq_label:
-            meep_data_found = True
-            
-            if show_avg:
-                # Process averaged data based on plot type
-                if plot_type == 'raw':
-                    x_avg, y_avg = data['y_coords'], data['power_avg_dB']
-                elif plot_type == 'sampled':
-                    x_avg = data['y_coords'][::sampling_factor]
-                    y_avg = data['power_avg_dB'][::sampling_factor]
-                elif plot_type == 'moving_average':
-                    x_avg, y_avg, _ = apply_moving_average_scipy(
-                        x_coords=data['y_coords'],
-                        power_data=data['power_avg_dB'],
-                        window_size=window_size
-                    )
-                else:
-                    raise ValueError("plot_type must be 'raw', 'sampled', or 'moving_average'")
-                
-                ax.plot(x_avg, y_avg, 
-                       label=f'MEEP {frequency} GHz (Avg)', 
-                       color=default_params['meep_avg_color'],
-                       linestyle=default_params['meep_avg_linestyle'])
-            
-            if show_last_timestep:
-                # Process last timestep data based on plot type
-                if plot_type == 'raw':
-                    x_last, y_last = last_timestep_data['y_coords'], last_timestep_data['power_dB']
-                elif plot_type == 'sampled':
-                    x_last = last_timestep_data['y_coords'][::sampling_factor]
-                    y_last = last_timestep_data['power_dB'][::sampling_factor]
-                elif plot_type == 'moving_average':
-                    x_last, y_last, _ = apply_moving_average_scipy(
-                        x_coords=last_timestep_data['y_coords'],
-                        power_data=last_timestep_data['power_dB'],
-                        window_size=window_size
-                    )
-                
-                ax.plot(x_last, y_last, 
-                       label=f'MEEP {frequency} GHz (Last Timestep)', 
-                       color=default_params['meep_last_color'],
-                       linestyle=default_params['meep_last_linestyle'])
-            
-            break
-    
-    if not meep_data_found:
-        print(f"Warning: No MEEP data found for frequency {freq_label}")
-        print(f"Available frequencies: {[data['frequency'] for data in averaged_aperture_data]}")
-    
-    # Plot GRASP data
-    ax.plot(y_grasp, amplitude_e_db, 
-           label=f'GRASP {frequency} GHz', 
-           color=default_params['grasp_color'],
-           linestyle=default_params['grasp_linestyle'])
-    
-    # Set plot properties
-    ax.set_xlabel(default_params['xlabel'])
-    ax.set_ylabel(default_params['ylabel'])
-    ax.set_title(f"{default_params['title_prefix']} {frequency} GHz")
-    ax.set_ylim(default_params['ylim'])
-    
-    if default_params['grid']:
-        ax.grid()
-    if default_params['legend']:
-        ax.legend()
-    
-    plt.tight_layout()
-    plt.show()
-    
-    return fig, ax
-
-#==========================================================================================================
-def apply_moving_average_scipy(x_coords, power_data, window_size):
-    """
-    Apply moving average using scipy's uniform filter - most efficient for uniform grids.
-    """
-    # Calculate window size in terms of array indices
-    dx = np.mean(np.diff(x_coords))  # assuming roughly uniform spacing
-    window_indices = int(window_size / dx)
-    
-    if window_indices < 1:
-        window_indices = 1
-    
-    # Apply uniform filter
-    power_avg = ndimage.uniform_filter1d(power_data, size=window_indices, mode='nearest')
-    
-    return x_coords, power_avg, np.zeros_like(power_avg)  # std not computed efficiently here
-
-def apply_moving_average_pandas(x_coords, power_data, window_size):
-    """
-    Apply moving average using pandas rolling window - efficient and flexible.
-    """
-    df = pd.DataFrame({'x': x_coords, 'power': power_data})
-    df = df.sort_values('x')  # Ensure sorted
-    
-    # Calculate number of points in window
-    dx = np.median(np.diff(df['x']))
-    window_points = max(1, int(window_size / dx))
-    
-    # Apply rolling window
-    rolling = df['power'].rolling(window=window_points, center=True, min_periods=1)
-    power_avg = rolling.mean().values
-    power_std = rolling.std().fillna(0).values
-    
-    return df['x'].values, power_avg, power_std
-
-def load_npz_data(file_path):
-    """
-    Function to load data from a .npz file.
-    """
-    data = np.load(file_path)
-    return data
-
-def load_h5_data(file_path):
-    """
-    Function to load data from a .h5 file.
-    """
-    with h5py.File(file_path, 'r') as f:
-        data = {key: f[key][()] for key in f.keys()}
-    return data
-
 
 def plot_field(simname, field_db, title, filename, xcoords, ycoords, freq,
                 vmin=-80, vmax=0, 
@@ -1021,8 +832,6 @@ def load_fields(basepath, filename):
     data = np.load(filepath)
 
     return data
-
-
 
 """
 2D near-to-far-field (NTFF) tools for the single-lens baffle sims.
