@@ -15,15 +15,16 @@ from matplotlib import rc
 
 import meepsat.helpers as exf
 
-# ! THE FOLLOWING SEGMENT OF THE CODE WAS TAKEN FROM THE MEEPART CODE
-# ! AND ADAPTED TO THE NEW STRUCTURE OF THE CODE IN THE MEEPSAT PACKAGE
-  
 # ----------------------------------- Aspheric Lens ----------------------------------- #
 class AsphericLens(object):
+    
     '''
     Class defining an aspheric lens of arbitrary shape and 
     position, and creating the function of sag (curvature) 
     used to create the permitttivity map
+    
+    Some segments of this class was adopted from the open source code MEEPART:
+    https://github.com/MolinAlexei/MEEPART/blob/main/meep_optics.py#L732
     '''
     
     def __init__(self,
@@ -722,214 +723,6 @@ class AsphericLens(object):
         plt.show()
         plt.close()
     
-    # def write_h5file(self, parallel=False, filename='epsilon_map'):
-    #     '''
-    #     Writes the file that will then be 
-    #     read within the MEEP simulation
-
-    #     Arguments
-    #     ---------
-    #     parallel : bool, optional
-    #         If the computation is run in parallel (default : False)
-    #     filename : str, optional
-    #         Name of the permittivity map file written. 
-    #         Needs to be the same name given to the MEEP simulation
-    #         (default : 'epsilon_map')
-    #     '''
-    #     self.mapname = filename
-    #     if parallel:
-    #         from mpi4py import MPI
-    #         comm = MPI.COMM_WORLD
-    #         if not h5py.get_config().mpi:
-    #             raise ValueError("h5py was built without MPI support, can't use mpio driver")
-            
-    #         with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
-    #             size_x = len(self.permittivity_map[:, 0])
-    #             size_y = len(self.permittivity_map[0, :])
-    #             dset = h.create_dataset('eps', (size_x, size_y), dtype='float32')
-    #             dset[:, :] = self.permittivity_map
-    #     else:
-    #         with h5py.File(filename + '.h5', 'w') as h:
-    #             size_x = len(self.permittivity_map[:, 0])
-    #             size_y = len(self.permittivity_map[0, :])
-    #             dset = h.create_dataset('eps', (size_x, size_y), 
-    #                                     dtype='float32', 
-    #                                     compression='gzip')
-    #             dset[:, :] = self.permittivity_map
-
-    # def write_h5file(self, parallel=False, filename='epsilon_map'):
-    #     '''
-    #     Writes the file that will then be 
-    #     read within the MEEP simulation
-
-    #     Arguments
-    #     ---------
-    #     parallel : bool, optional
-    #         If the computation is run in parallel (default : False)
-    #     filename : str, optional
-    #         Name of the permittivity map file written. 
-    #         Needs to be the same name given to the MEEP simulation
-    #         (default : 'epsilon_map')
-    #     '''
-    #     self.mapname = filename
-        
-    #     if parallel:
-    #         from mpi4py import MPI
-    #         comm = MPI.COMM_WORLD
-    #         rank = comm.Get_rank()
-            
-    #         if not h5py.get_config().mpi:
-    #             raise ValueError("h5py was built without MPI support, can't use mpio driver")
-            
-    #         with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
-    #             size_x = len(self.permittivity_map[:, 0])
-    #             size_y = len(self.permittivity_map[0, :])
-    #             dset = h.create_dataset('eps', (size_x, size_y), dtype='float32')
-                
-    #             # Use collective I/O - all processes must participate
-    #             with dset.collective:
-    #                 # Only rank 0 writes the data
-    #                 if rank == 0:
-    #                     dset[:, :] = self.permittivity_map.astype('float32')
-            
-    #         comm.barrier()
-    #     else:
-    #         with h5py.File(filename + '.h5', 'w') as h:
-    #             size_x = len(self.permittivity_map[:, 0])
-    #             size_y = len(self.permittivity_map[0, :])
-    #             dset = h.create_dataset('eps', (size_x, size_y), 
-    #                                     dtype='float32', 
-    #                                     compression='gzip')
-    #             dset[:, :] = self.permittivity_map
-
-    # def write_h5file(self, parallel=False, filename='epsilon_map'):
-    #     '''
-    #     Writes the file that will then be 
-    #     read within the MEEP simulation
-
-    #     Arguments
-    #     ---------
-    #     parallel : bool, optional
-    #         If the computation is run in parallel (default : False)
-    #     filename : str, optional
-    #         Name of the permittivity map file written. 
-    #         Needs to be the same name given to the MEEP simulation
-    #         (default : 'epsilon_map')
-    #     '''
-    #     self.mapname = filename
-        
-    #     # Check if permittivity_map is properly initialized
-    #     if self.permittivity_map is None:
-    #         raise ValueError("permittivity_map is None. Call assemble() before write_h5file()")
-        
-    #     # Make sure permittivity_map is a proper 2D array
-    #     try:
-    #         size_x = len(self.permittivity_map[:, 0])
-    #         size_y = len(self.permittivity_map[0, :])
-    #     except (IndexError, AttributeError, TypeError):
-    #         raise ValueError("permittivity_map has incorrect shape or type. Expected a 2D array.")
-        
-    #     if parallel:
-    #         try:
-    #             from mpi4py import MPI
-    #             comm = MPI.COMM_WORLD
-    #             rank = comm.Get_rank()
-    #             size = comm.Get_size()
-                
-    #             if not h5py.get_config().mpi:
-    #                 raise ValueError("h5py was built without MPI support, can't use mpio driver")
-                
-    #             print(f"Process {rank}/{size}: Creating HDF5 file with parallel I/O")
-                
-    #             # Create file with parallel access
-    #             with h5py.File(filename + '.h5', 'w', driver='mpio', comm=comm) as h:
-    #                 # Create dataset
-    #                 dset = h.create_dataset('eps', (size_x, size_y), dtype='float32')
-                    
-    #                 # Use collective I/O for better compatibility with ROMIO drivers
-    #                 dset.write_direct(self.permittivity_map.astype('float32'))
-                    
-    #                 # Force synchronization to ensure all processes have written their data
-    #                 h.flush()
-                    
-    #             # Additional MPI barrier to ensure all processes complete writing
-    #             comm.barrier()
-    #             print(f"Process {rank}/{size}: HDF5 file written successfully")
-                
-    #         except Exception as e:
-    #             from mpi4py import MPI
-    #             rank = MPI.COMM_WORLD.Get_rank()
-    #             print(f"Process {rank}: Error in parallel write: {str(e)}")
-                
-    #             # Fallback to serial write on rank 0 only
-    #             if rank == 0:
-    #                 print("Falling back to serial write...")
-    #                 try:
-    #                     with h5py.File(filename + '.h5', 'w') as h:
-    #                         dset = h.create_dataset('eps', (size_x, size_y), 
-    #                                                 dtype='float32', 
-    #                                                 compression='gzip')
-    #                         dset[:, :] = self.permittivity_map
-    #                     print("Serial fallback write successful")
-    #                 except Exception as fallback_error:
-    #                     print(f"Serial fallback also failed: {str(fallback_error)}")
-    #                     raise
-                
-    #             # Ensure all processes wait for rank 0 to complete
-    #             MPI.COMM_WORLD.barrier()
-                
-    #     else:
-    #         try:
-    #             with h5py.File(filename + '.h5', 'w') as h:
-    #                 dset = h.create_dataset('eps', (size_x, size_y), 
-    #                                         dtype='float32', 
-    #                                         compression='gzip')
-    #                 dset[:, :] = self.permittivity_map
-    #             print(f"HDF5 file written successfully in serial mode")
-    #         except Exception as e:
-    #             print(f"Error in serial write: {str(e)}")
-    #             raise
-
-    #! def write_h5file(self, parallel=False, filename='epsilon_map'):
-    #     '''
-    #     Writes the file that will then be 
-    #     read within the MEEP simulation
-
-    #     Arguments
-    #     ---------
-    #     parallel : bool, optional
-    #         If the computation is run in parallel (default : False)
-    #     filename : str, optional
-    #         Name of the permittivity map file written. 
-    #         Needs to be the same name given to the MEEP simulation
-    #         (default : 'epsilon_map')
-    #     '''
-    #     self.mapname = filename
-        
-    #     if parallel:
-    #         from mpi4py import MPI
-    #         comm = MPI.COMM_WORLD
-    #         rank = comm.Get_rank()
-            
-    #         # Only rank 0 writes the file
-    #         if rank == 0:
-    #             with h5py.File(filename + '.h5', 'w') as h:
-    #                 size_x = len(self.permittivity_map[:, 0])
-    #                 size_y = len(self.permittivity_map[0, :])
-    #                 dset = h.create_dataset('eps', (size_x, size_y), 
-    #                                         dtype='float32')
-    #                 dset[:, :] = self.permittivity_map.astype('float32')
-            
-    #         # Wait for rank 0 to finish writing
-    #         comm.barrier()
-    #     else:
-    #         with h5py.File(filename + '.h5', 'w') as h:
-    #             size_x = len(self.permittivity_map[:, 0])
-    #             size_y = len(self.permittivity_map[0, :])
-    #             dset = h.create_dataset('eps', (size_x, size_y), 
-    #                                     dtype='float32', 
-    #                                     compression='gzip')
-    #             dset[:, :] = self.permittivity_map
 
     def write_h5file(self, parallel=False, filename='epsilon_map'):
         '''
