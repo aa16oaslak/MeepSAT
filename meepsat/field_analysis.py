@@ -13,9 +13,6 @@ import json
 from scipy import ndimage
 
 
-
-
-
 def get_MEEP_ff(simulation,
                 ff_distance = None,
                 ff_angle = None,
@@ -103,8 +100,6 @@ def get_MEEP_ff(simulation,
 
     return angles, ffmeep
 
-
-@profile
 def get_complex_field(sim,
                         simres,
                         aper_size,
@@ -221,7 +216,6 @@ def get_complex_field(sim,
     
     return result
 
-
 # Save the epsilon map
 def save_epsilon_map(sim, filename, plot=True, parallel=False):
     """
@@ -245,9 +239,8 @@ def save_epsilon_map(sim, filename, plot=True, parallel=False):
     
     return eps_data
 
-
-
-# Functions for post analysis with GRASP, CST, MEEPSAT!
+# The go to verified function for calculating the far-field pattern from a 
+# 1D near-field line in MeepSAT
 def meepsat_farfield(efield,
              coords,
              wavelength,
@@ -327,7 +320,6 @@ def meepsat_farfield(efield,
         'plot_label': plot_label
     }
 
-
 def calculate_grasp_resolution(y_coords):
     """
     Calculate the no of points per mm for GRASP data.
@@ -382,10 +374,7 @@ def calculate_CST_resolution(y_coords):
     resolution = 1 / avg_spacing
     return resolution
 
-
-
-#==========================================================================================================
-
+# Additional Helper Functions for Loading and Visualizing Data
 def load_npz_data(file_path):
     """
     Function to load data from a .npz file.
