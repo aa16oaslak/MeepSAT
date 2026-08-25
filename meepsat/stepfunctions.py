@@ -999,12 +999,65 @@ _ANIM = {
     "dpi": 150,              # v1 used 300, i.e. ~4x the pixels of this
     "base_factor": 8,        # v1 used 12
     "frame_reduce": "decimate",   # "decimate" (cheap) | "mean" (anti-aliased)
+    "field_mode": "real",    # "real"/"raw" -> Re(E)^2 | "complex" -> |E|^2
     "frame_h5": None,        # defaults to <anim_file_name>_frames.h5
 }
 
 # Per-component caches, keyed by the generated function name.
 _FRAME_CACHE = {}
 _PLT_READY = False
+
+# Accepted spellings for the animation field mode.  "real" plots the
+# INSTANTANEOUS field Re(E(t)); "complex" plots the ENVELOPE |E(t)|.
+_FIELD_MODE_ALIASES = {
+    "real": "real", "raw": "real", "instantaneous": "real", "re": "real",
+    "complex": "complex", "cmplx": "complex", "envelope": "complex",
+    "abs": "complex", "magnitude": "complex",
+}
+
+# One log line per component, not one per frame.
+_FIELD_MODE_LOGGED = set()
+
+
+def _normalise_field_mode(mode):
+    """Canonicalise a user-supplied field_mode, failing loudly on a typo."""
+    key = str(mode).strip().lower()
+    if key not in _FIELD_MODE_ALIASES:
+        raise ValueError(
+            f"field_mode must be 'real'/'raw' or 'complex' (got {mode!r})")
+    return _FIELD_MODE_ALIASES[key]
+
+
+def _field_mode_label(mode):
+    """Default colourbar / title text for a mode."""
+    return "|E|^2 (dB)" if mode == "complex" else "Power (dB)"
+
+
+def _resolve_field_mode(sim, plotting, key):
+    """
+    Which fetch this component uses; a per-component ``plotting_params`` entry
+    beats the global ``_ANIM["field_mode"]``.
+
+    MUST be evaluated on EVERY rank.  ``get_array`` is collective, so a rank
+    that disagrees about ``cmplx`` changes the shape and dtype of the call and
+    hangs the job.  That is why ``_frame_context`` calls this OUTSIDE its
+    ``_is_master()`` guard.
+
+    ``cmplx=True`` only carries information when the Simulation was built with
+    ``force_complex_fields=True``.  Without it Im(E) is identically zero, so
+    ``|E|^2 == Re(E)^2`` and the complex fetch would cost twice the memory to
+    tell you nothing new -- fall back rather than pay for that.
+    """
+    mode = _normalise_field_mode(plotting.get("field_mode", _ANIM["field_mode"]))
+    note = ""
+    if mode == "complex" and not getattr(sim, "force_complex_fields", False):
+        mode = "real"
+        note = ("  (forced: Simulation has no force_complex_fields=True, "
+                "so Im(E) is zero)")
+    if key not in _FIELD_MODE_LOGGED:
+        _FIELD_MODE_LOGGED.add(key)
+        _mprint(f"[anim] {key}: field_mode={mode}{note}")
+    return mode
 
 
 def set_animation_params(anim_params: dict):
@@ -1029,6 +1082,22 @@ def set_animation_params(anim_params: dict):
       frame_reduce   "decimate" (strided view, zero allocation, can alias a fine
                      fringe pattern) or "mean" (block average, anti-aliased,
                      costs the bounded temporary in ``_block_mean``)
+      field_mode     which field the animation plots.  "real" (default, also
+                     spelled "raw") fetches the INSTANTANEOUS field and plots
+                     10*log10(Re(E)^2) -- the movie shows the wave propagating.
+                     "complex" fetches with ``cmplx=True`` and plots
+                     10*log10(|E|^2) -- the ENVELOPE, which is nearly static
+                     once a ContinuousSource run reaches steady state, and is
+                     what you want for reading focal spots and sidelobes.
+                     Requires ``force_complex_fields=True`` on the Simulation;
+                     without it the imaginary part is zero and this silently
+                     falls back to "real" (logged once per component).
+                     Cost: the complex fetch is complex128 rather than float64
+                     over the full cell, on every rank -- roughly 2x the
+                     per-frame fetch.  It is still ONE fetch, and the dB maths
+                     still runs after decimation, so this is about half of v1's
+                     animation cost, not a return to it.
+                     Settable per component via ``plotting_params[func_name]``.
       frame_h5       explicit path for the frame store
     """
     for key in _ANIM:
@@ -1037,8 +1106,16 @@ def set_animation_params(anim_params: dict):
     _ANIM["plotting_params"] = anim_params.get("plotting_params", None)
     if _ANIM["render_mode"] not in ("dump", "inline"):
         raise ValueError("render_mode must be 'dump' or 'inline'")
+    # Validate here, not at the first frame: a typo like "imag" should not
+    # surface several hundred timesteps into an MPI run.
+    _ANIM["field_mode"] = _normalise_field_mode(_ANIM["field_mode"])
+    for _k, _pp in (_ANIM["plotting_params"] or {}).items():
+        if isinstance(_pp, dict) and "field_mode" in _pp:
+            _normalise_field_mode(_pp["field_mode"])
     _FRAME_CACHE.clear()
+    _FIELD_MODE_LOGGED.clear()
     _mprint(f"[anim] render_mode={_ANIM['render_mode']} "
+            f"field_mode={_ANIM['field_mode']} "
             f"max_frame_px={_ANIM['max_frame_px']} dpi={_ANIM['dpi']}")
     return
 
@@ -1288,10 +1365,16 @@ def _frame_context(sim, component, key):
     ctx = {"step_y": step_y, "step_x": step_x, "eps": None,
            "x_ticks": None, "x_tick_labels": None,
            "y_ticks": None, "y_tick_labels": None,
-           "x": None, "y": None}
+           "x": None, "y": None, "field_mode": "real"}
 
     x, y, z, w = sim.get_array_metadata()                # COLLECTIVE
     del z, w
+
+    # Resolved on EVERY rank, deliberately outside the master guard below:
+    # _fetch_power_dB turns this into a collective get_array(cmplx=...) call,
+    # and ranks that disagree about it deadlock the job.
+    ctx["field_mode"] = _resolve_field_mode(
+        sim, (_ANIM["plotting_params"] or {}).get(key, {}) or {}, key)
 
     if _is_master():
         ctx["eps"] = np.ascontiguousarray(
@@ -1327,19 +1410,28 @@ def _fetch_power_dB(sim, component, ctx):
 
     Three separate costs removed:
       * ``cmplx=True`` fetched complex128 and the very next line took ``.real``,
-        so half of every fetch was discarded -> v2 fetches real;
+        so half of every fetch was discarded -> v2 fetches real by DEFAULT.
+        ``field_mode="complex"`` opts back into the complex fetch on purpose,
+        to plot the envelope |E|^2 rather than the instantaneous Re(E)^2 --
+        it costs ~2x per frame, which is why it is opt-in;
       * ``np.abs(..., out=np.empty(...))`` allocated a SECOND full-cell float64
         while the complex one was still alive -> v2 never has two;
       * the squaring and log10 ran over the FULL grid before matplotlib
         decimated it for display -> v2 decimates first, so the arithmetic runs
         on a ~2000 px array instead of the whole cell.
 
-    ``abs(x)**2 == x**2``, so dropping the ``np.abs`` changes nothing.
+    In the real path ``abs(x)**2 == x**2``, so dropping the ``np.abs`` changes
+    nothing.  In the complex path |E|^2 = Re^2 + Im^2 is computed directly,
+    which skips the sqrt that ``np.abs`` would take only to be squared again.
 
     COLLECTIVE: the fetch runs on every rank; only master keeps the result.
+    ``ctx["field_mode"]`` is resolved in ``_frame_context`` on every rank, so
+    the ``cmplx`` flag below is guaranteed identical across the job.
     """
+    cmplx = ctx.get("field_mode", "real") == "complex"
+
     raw = sim.get_array(component=component, size=sim.cell_size,
-                        center=mp.Vector3())              # real, not cmplx
+                        center=mp.Vector3(), cmplx=cmplx)
     if not _is_master():
         del raw
         return None
@@ -1347,12 +1439,23 @@ def _fetch_power_dB(sim, component, ctx):
     view = np.asarray(raw).transpose()
     sy, sx = ctx["step_y"], ctx["step_x"]
     if _ANIM["frame_reduce"] == "mean" and (sy > 1 or sx > 1):
-        small = _block_mean(np.ascontiguousarray(view), sy, sx).astype(np.float32)
+        # Coherent block average, THEN modulus.  Averaging the complex field
+        # and then taking |.| is not the same as averaging |.|, and this order
+        # is what the real path already does (average, then square).
+        small = _block_mean(np.ascontiguousarray(view), sy, sx)
+        if not cmplx:
+            small = small.astype(np.float32, copy=False)
     else:
-        small = np.ascontiguousarray(view[::sy, ::sx], dtype=np.float32)
+        small = np.ascontiguousarray(
+            view[::sy, ::sx], dtype=(np.complex128 if cmplx else np.float32))
     del raw, view
 
-    small *= small                                        # |E|^2
+    if cmplx:
+        # |E|^2 = Re^2 + Im^2, on the already-decimated frame.
+        small = (small.real ** 2 + small.imag ** 2).astype(np.float32)
+    else:
+        small *= small                                    # Re(E)^2
+
     with np.errstate(divide="ignore", invalid="ignore"):
         np.log10(small, out=small)
     small *= 10
@@ -1380,6 +1483,8 @@ def E_field_power_dB(sim, component, component_name, func_name=None):
     if not _is_master():
         return
 
+    _default_label = _field_mode_label(ctx["field_mode"])
+
     if getattr(caller_func, "anim", None) is None:
         caller_func.anim = Animate2DArray(fps=_ANIM["Nfps"])
         _mprint(f"[anim] initialised {component_name}^2 animation "
@@ -1389,7 +1494,7 @@ def E_field_power_dB(sim, component, component_name, func_name=None):
         plot_func="plot_2d_array",
         kwargs={"array": small,
                 "eps_data": ctx["eps"],
-                "title": plotting.get("title", "Power (dB)"),
+                "title": plotting.get("title", _default_label),
                 "xlabel": plotting.get("xlabel", "X (mm)"),
                 "ylabel": plotting.get("ylabel", "Y (mm)"),
                 "x_ticks": ctx["x_ticks"], "x_tick_labels": ctx["x_tick_labels"],
@@ -1397,7 +1502,7 @@ def E_field_power_dB(sim, component, component_name, func_name=None):
                 "elapsed": sim.meep_time(),
                 "cmap": cmap_blue if plotting.get("cmap", "custom_blue") == "custom_blue"
                         else plotting.get("cmap"),
-                "cbar_label_": plotting.get("cbar_label", "Power (dB)"),
+                "cbar_label_": plotting.get("cbar_label", _default_label),
                 "invert": plotting.get("invert", False),
                 "scale": plotting.get("scale", "log"),
                 "vmin": plotting.get("vmin", -50),
@@ -1457,6 +1562,9 @@ def dump_field_frame(sim, component, component_name, func_name=None):
         plotting = (_ANIM["plotting_params"] or {}).get(key, {}) or {}
         fh.attrs["plotting_params"] = json.dumps(plotting)
         fh.attrs["component_name"] = component_name
+        # Self-describing: the whole point of dump mode is re-styling the movie
+        # later without re-simulating, which needs to know what was plotted.
+        fh.attrs["field_mode"] = ctx["field_mode"]
         fh.attrs["fps"] = _ANIM["Nfps"]
         store = {"file": fh, "frames": dset, "times": times, "path": path}
         _FRAME_STORE[key] = store
@@ -1508,6 +1616,10 @@ def render_movie_from_h5(h5path, out_mp4, fps=None, plotting_params=None,
         plotting = plotting_params or json.loads(
             fh.attrs.get("plotting_params", "{}"))
         fps = fps or int(fh.attrs.get("fps", _ANIM["Nfps"]))
+        field_mode = fh.attrs.get("field_mode", "real")
+        if isinstance(field_mode, bytes):
+            field_mode = field_mode.decode()
+        default_label = _field_mode_label(field_mode)
         nframes = frames.shape[0]
         if nframes == 0:
             print(f"ERROR: {h5path} contains no frames")
@@ -1530,14 +1642,14 @@ def render_movie_from_h5(h5path, out_mp4, fps=None, plotting_params=None,
                 plot_func="plot_2d_array",
                 kwargs={"array": frames[i],          # lazy read, one frame
                         "eps_data": eps,
-                        "title": plotting.get("title", "Power (dB)"),
+                        "title": plotting.get("title", default_label),
                         "xlabel": plotting.get("xlabel", "X (mm)"),
                         "ylabel": plotting.get("ylabel", "Y (mm)"),
                         "x_ticks": x_ticks, "x_tick_labels": x_labels,
                         "y_ticks": y_ticks, "y_tick_labels": y_labels,
                         "elapsed": float(times[i]),
                         "cmap": cmap_blue if cmap_name == "custom_blue" else cmap_name,
-                        "cbar_label_": plotting.get("cbar_label", "Power (dB)"),
+                        "cbar_label_": plotting.get("cbar_label", default_label),
                         "scale": plotting.get("scale", "log"),
                         "vmin": plotting.get("vmin", -50),
                         "vmax": plotting.get("vmax", 0)})
@@ -1655,7 +1767,8 @@ def save_animation(sim=None):
 #   stepfunctions.set_animation_params(anim_params={
 #       'image_every': ..., 'Nfps': ..., 'anim_file_name': savepath + name,
 #       'plotting_params': ...,
-#       'render_mode': 'dump', 'max_frame_px': 2000, 'dpi': 150})
+#       'render_mode': 'dump', 'max_frame_px': 2000, 'dpi': 150,
+#       'field_mode': 'real'})        # or 'complex' for the |E| envelope
 #   stepfunctions.set_field_params(field_params={
 #       'size_x': size_x, 'size_y': size_y, 'savepath': savepath,
 #       'downsampling_factor_x': dsx, 'downsampling_factor_y': dsy,
