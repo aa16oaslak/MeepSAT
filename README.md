@@ -84,15 +84,11 @@ Due to the complex dependencies of the MEEP FDTD software, it is highly recommen
     Within python environment, copy paste the following lines of code
     ```python
     import meepsat.field_analysis
-    import meepsat.simulation_2D
-    import meepsat.meep_goemetry
+    import meepsat.meep_geometry
 
     # Check what's available in each module
     print("Functions in meepsat.field_analysis:")
     print([name for name in dir(meepsat.field_analysis) if not name.startswith('_')])
-
-    print("\nFunctions in meepsat.simulation_2D:")
-    print([name for name in dir(meepsat.simulation_2D) if not name.startswith('_')])
 
     print("\nFunctions in meepsat.meep_goemetry:")
     print([name for name in dir(meepsat.meep_goemetry) if not name.startswith('_')])
