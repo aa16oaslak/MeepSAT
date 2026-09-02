@@ -13,7 +13,7 @@ import json
 import meepsat.simulator as sim
 import meepsat.meep_geometry as comp_meep
 import meepsat.permittivity_components as comp_eps
-import meepsat.stepfunctions as stepfunctions
+import meepsat.stepfunctions_old as stepfunctions_old
 import meepsat.json_to_script as json_to_script
 import meepsat.field_analysis as mpsat_analysis
 import meepsat.helpers as mpsat_helpers
@@ -136,12 +136,12 @@ sim.plot_and_save_epsilon(
 #~ ---------------------------------------------
 #~ Set the stepfunctions parameters
 #! Animation Parameters
-stepfunctions.set_animation_params(anim_params= {'image_every': data["output"]["animation_options"]["image_every"], 
+stepfunctions_old.set_animation_params(anim_params= {'image_every': data["output"]["animation_options"]["image_every"], 
                                               'Nfps': data["output"]["animation_options"]["Nfps"], 
                                               'anim_file_name': savepath + "/"+ data["output"]["animation_options"]["movie_name"] + ".mp4"})
 
 #! Field Parameters
-stepfunctions.set_field_params(field_params= {'size_x': size_x,
+stepfunctions_old.set_field_params(field_params= {'size_x': size_x,
                                               'size_y': size_y,
                                               'savepath': savepath,
                                               'downsampling_factor_x': data["output"]["animation_options"]["downsample_x"],
@@ -157,11 +157,11 @@ runtime_params = sim.calculate_runtime_parameters(
 )
 
 #~ ---------------------------------------------
-simulation.run(mp.at_every(runtime_params["animation_timestep"], stepfunctions.Ez2_dB),
-               mp.after_time(runtime_params["t0"], mp.at_every(runtime_params["dt"], stepfunctions.accumulate_efield_and_hfield)),
-               mp.at_end(stepfunctions.save_animation),
-               mp.at_end(stepfunctions.save_accumulated_fields),
-               mp.at_end(stepfunctions.extract_xyzw),
+simulation.run(mp.at_every(runtime_params["animation_timestep"], stepfunctions_old.Ez2_dB),
+               mp.after_time(runtime_params["t0"], mp.at_every(runtime_params["dt"], stepfunctions_old.accumulate_efield_and_hfield)),
+               mp.at_end(stepfunctions_old.save_animation),
+               mp.at_end(stepfunctions_old.save_accumulated_fields),
+               mp.at_end(stepfunctions_old.extract_xyzw),
                until = runtime_params["total_time"])
 
 print("Simulation completed.")                                                 
