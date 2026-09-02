@@ -12,7 +12,6 @@ import pandas as pd
 import json
 from scipy import ndimage
 
-
 def get_MEEP_ff(simulation,
                 ff_distance = None,
                 ff_angle = None,
