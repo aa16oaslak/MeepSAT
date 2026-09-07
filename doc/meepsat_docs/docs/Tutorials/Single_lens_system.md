@@ -183,7 +183,7 @@ Now let's set the different run time parameters:
 - Runtime Parameters
     `runtime_params = sim.calculate_runtime_parameters(...)`
     - Computes temporal simulation parameters for field extraction based on the source frequency
-        - `source_freq`: Operating frequency (extracted from JSON with a typo "frequecy")
+        - `source_freq`: Operating frequency (extracted from the JSON key "frequency")
         - `total_time`: Total simulation duration
         - `animation_timestep`: Time interval between field captures
         - `points_per_period`: Temporal resolution (10 points per wavelength period)
@@ -206,7 +206,7 @@ stepfunctions.set_field_params(field_params= {'size_x': size_x,
 
 # Runtime parameters
 runtime_params = sim.calculate_runtime_parameters(
-    source_freq=float(data["sources"]["source1"]["frequecy"]),
+    source_freq=float(data["sources"]["source1"]["frequency"]),
     total_time= 400,
     animation_timestep = data["output"]["animation_options"]["image_every"],
     points_per_period=20,

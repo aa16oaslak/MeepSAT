@@ -37,7 +37,7 @@
             "size_y": 300,
             "size_z": 0,
             "component": "Ez",
-            "frequecy": 0.3,
+            "frequency": 0.3,
             "extra_args": {
             "start_time": 0,
             "end_time": "mp.inf",
