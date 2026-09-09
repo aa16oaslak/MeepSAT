@@ -34,9 +34,24 @@ def _create_triangular_mesh(
                             resolution,
                             filter_option = "min",
                             plot= False,
-                            figname= 'triangular_mesh.png'
+                            figname= 'triangular_mesh.png',
+                            x_offset_px= 0,
+                            y_offset_px= 0
                             ):
-    """Create triangular mesh from absorber boundary."""
+    """Create triangular mesh from absorber boundary.
+
+    Parameters
+    ----------
+    epsilon_array : ndarray
+        Permittivity map to mesh. This may be a *local window* cut out of a
+        larger map; in that case ``x_offset_px``/``y_offset_px`` place the
+        resulting mesh back into the coordinate system of the full map.
+    x_offset_px, y_offset_px : int, optional
+        Pixel index, in the full grid, of the ``[0, 0]`` element of
+        ``epsilon_array``. Defaults to 0, i.e. ``epsilon_array`` is assumed to
+        span the whole grid. Offsets are applied before the conversion to mm so
+        that a windowed mesh matches a full-grid one exactly.
+    """
     from scipy import ndimage
     from scipy.spatial import ConvexHull
     from matplotlib.tri import Triangulation
@@ -51,7 +66,8 @@ def _create_triangular_mesh(
     boundary = ndimage.binary_erosion(binary_array) ^ binary_array
     
     indices = np.where(boundary)
-    absorber_points = np.column_stack((indices[1] / resolution, indices[0] / resolution))
+    absorber_points = np.column_stack(((indices[1] + x_offset_px) / resolution,
+                                       (indices[0] + y_offset_px) / resolution))
     
     if len(absorber_points) < MIN_POINTS_FOR_TRIANGULATION:
         return None
@@ -62,8 +78,8 @@ def _create_triangular_mesh(
     interior_mask = binary_array > 0
     interior_indices = np.where(interior_mask)
     step = max(1, len(interior_indices[0]) // INTERIOR_POINTS_TARGET)
-    interior_points = np.column_stack((interior_indices[1][::step] / resolution,
-                                    interior_indices[0][::step] / resolution))
+    interior_points = np.column_stack(((interior_indices[1][::step] + x_offset_px) / resolution,
+                                    (interior_indices[0][::step] + y_offset_px) / resolution))
     
     all_points = np.vstack([boundary_points, interior_points])
     tri = Triangulation(all_points[:, 0], all_points[:, 1])

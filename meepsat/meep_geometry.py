@@ -2019,6 +2019,9 @@ class Absorbers:
                  start_point = None,
                  end_point = None,
                  overall_factor= 0.95,
+                 # Local-region (bounding box) computation
+                 local_region=True,
+                 local_margin=0.0,
                  # Plotting parameters
                  plot_alpha=False,
                  plot_profile=False,
@@ -2103,6 +2106,22 @@ class Absorbers:
         self.start_point = start_point
         self.end_point = end_point
         self.overall_factor = overall_factor
+
+        # Local-region computation:
+        # when True every absorber is rasterised and meshed inside a small
+        # window (its own bounding box) cut out of the epsilon map instead of
+        # copying/scanning the whole map for each absorber. The resulting mesh
+        # is translated back into global coordinates, so the geometry produced
+        # is the same - only much cheaper for large grids / many absorbers.
+        self.local_region = local_region
+        self.local_margin = local_margin  # extra padding around the box, in mm
+        # Window of the last absorber built, as pixel indices
+        # (x_start, x_stop, y_start, y_stop) into eps_array
+        self.absorber_window = None
+        # (window, array) pairs of every absorber built so far
+        self.absorber_windows = []
+        # Alpha/profile figures only have to be drawn once per run
+        self._profile_plots_done = False
         
         # Plotting options
         self.plot_alpha = plot_alpha
@@ -2131,10 +2150,15 @@ class Absorbers:
         
         self.w_array = self.p * np.sqrt(self.alpha_array)
 
-        if self.plot_alpha:
-            self._plot_alpha()
-        if self.plot_profile:
-            self._plot_profile()
+        # The taper profile does not depend on where the absorber sits, so the
+        # alpha/profile figures are only drawn for the first absorber of a run
+        # (every absorber used to overwrite the same two files).
+        if not self._profile_plots_done:
+            if self.plot_alpha:
+                self._plot_alpha()
+            if self.plot_profile:
+                self._plot_profile()
+            self._profile_plots_done = True
 
         # Create the absorber filled with triangular mesh
         self.absorber, self.tri = self.create_absorber_from_profile(
@@ -2154,6 +2178,11 @@ class Absorbers:
             material_value=self.epsilon_r,
             resolution=self.resolution
         )
+
+        if self.tri is None:
+            print("No absorber material found in the local window - no prisms created.")
+            self.absorber_prisms = []
+            return self.geometry_objects
 
         self.absorber_prisms = mesh.convert_triangles_to_prisms(gridx_size_mm=self.grid_size_sx,
                                                                 gridy_size_mm=self.grid_size_sy,
@@ -2242,6 +2271,27 @@ class Absorbers:
 
         return self.geometry_objects
 
+    def get_epsilon_map(self, base_array=None):
+        """
+        Full-size epsilon map with every absorber pasted back into it.
+
+        With ``local_region=True`` each absorber is only rasterised inside its
+        own window, so ``self.absorber`` holds that window rather than a
+        full-size map. Use this helper when the complete map is needed (e.g.
+        for plotting); every window built so far is written into a copy of the
+        original epsilon map.
+
+        Parameters
+        ----------
+        base_array : ndarray, optional
+            Map to paste the absorbers into. Defaults to the ``eps_array``
+            given at construction time (which is never modified).
+        """
+        eps_map = (self.eps_array if base_array is None else base_array).copy()
+        for (x_start, x_stop, y_start, y_stop), window in self.absorber_windows:
+            eps_map[x_start:x_stop, y_start:y_stop] = window
+        return eps_map
+
     def _plot_alpha(self):
         plt.figure(figsize=(10, 6))
         plt.plot(self.l_array/self.h, self.alpha_array, label = self.taper_type, color = 'blue')
@@ -2304,6 +2354,82 @@ class Absorbers:
 
 
 
+    def _local_window(self,
+                      center_x,
+                      center_y,
+                      scaled_pyramid_height,
+                      scaled_base_width,
+                      nx,
+                      ny,
+                      orientation,
+                      angle_axis,
+                      resolution):
+        """
+        Pixel bounding box of a single absorber, clipped to the epsilon map.
+
+        Everything an absorber touches (its rasterised profile) lives inside
+        this window, so the drawing and the triangulation only ever have to
+        look at these few pixels instead of the whole epsilon map.
+
+        Parameters
+        ----------
+        center_x, center_y : int
+            Absorber base centre in pixel coordinates of the full map.
+        scaled_pyramid_height, scaled_base_width : int
+            Absorber height and base width in pixels.
+        nx, ny : int
+            Size of the epsilon map in pixels.
+        orientation : str or float
+            Same values accepted by :meth:`create_absorber_from_profile`.
+
+        Returns
+        -------
+        tuple of int
+            ``(x_start, x_stop, y_start, y_stop)`` index bounds into the
+            epsilon map. The window is empty when ``x_stop <= x_start`` or
+            ``y_stop <= y_start`` (absorber completely outside the grid).
+        """
+        h = float(scaled_pyramid_height)
+        half_w = scaled_base_width / 2.0
+
+        if orientation == "+y":
+            x_lo, x_hi = center_x - half_w, center_x + half_w
+            y_lo, y_hi = center_y, center_y + h
+        elif orientation == "-y":
+            x_lo, x_hi = center_x - half_w, center_x + half_w
+            y_lo, y_hi = center_y - h, center_y
+        elif orientation == "+x":
+            x_lo, x_hi = center_x, center_x + h
+            y_lo, y_hi = center_y - half_w, center_y + half_w
+        elif orientation == "-x":
+            x_lo, x_hi = center_x - h, center_x
+            y_lo, y_hi = center_y - half_w, center_y + half_w
+        elif isinstance(orientation, float):
+            if angle_axis == "x":
+                orientation_rad = np.radians(orientation)
+                tip_x = center_x + h * np.cos(orientation_rad)
+                tip_y = center_y + h * np.sin(orientation_rad)
+            else:
+                # Conservative box: the tip can point anywhere on the circle
+                tip_x, tip_y = center_x, center_y
+                half_w = half_w + h
+            x_lo, x_hi = min(center_x, tip_x) - half_w, max(center_x, tip_x) + half_w
+            y_lo, y_hi = min(center_y, tip_y) - half_w, max(center_y, tip_y) + half_w
+        else:
+            raise ValueError("Invalid orientation type")
+
+        # 2 px of slack for the integer truncation done by the rasteriser,
+        # plus whatever extra padding the user asked for (given in mm).
+        pad = 2.0 + max(0.0, self.local_margin) * resolution
+
+        x_start = int(max(0, math.floor(x_lo - pad)))
+        x_stop = int(min(nx, math.ceil(x_hi + pad) + 1))
+        y_start = int(max(0, math.floor(y_lo - pad)))
+        y_stop = int(min(ny, math.ceil(y_hi + pad) + 1))
+
+        return x_start, x_stop, y_start, y_stop
+
+
     def create_absorber_from_profile(self,
                                      grid_size_sx, 
                                     grid_size_sy, 
@@ -2327,8 +2453,17 @@ class Absorbers:
         -----------
         alpha_profile : ndarray
             Filling factor profile (0 to 1) as function of height
+
+        Notes
+        -----
+        When ``self.local_region`` is True (the default) the absorber is
+        rasterised and triangulated inside its own bounding box only - see
+        :meth:`_local_window`. The returned array is then that window rather
+        than a copy of the whole epsilon map, and the triangulation is shifted
+        back into global (mm) coordinates so the resulting prisms are
+        unchanged. Set ``local_region=False`` to fall back to working on a copy
+        of the full epsilon map.
         """
-        absorber_array = eps_array.copy()
         scaled_pyramid_height = int(pyramid_height * resolution)
         scaled_base_width = int(base_width * resolution)
         scaled_grid_size_sx = int(grid_size_sx * resolution)
@@ -2338,6 +2473,46 @@ class Absorbers:
         center_x = int((center_x_mm + grid_size_sx/2) * resolution)
         center_y = int((center_y_mm + grid_size_sy/2) * resolution)
 
+        # Never index past the epsilon map that was actually handed to us
+        nx = min(scaled_grid_size_sx, eps_array.shape[0])
+        ny = min(scaled_grid_size_sy, eps_array.shape[1])
+
+        # ~ LOCAL REGION: only touch the pixels this absorber can reach
+        if self.local_region:
+            x_start, x_stop, y_start, y_stop = self._local_window(
+                center_x=center_x,
+                center_y=center_y,
+                scaled_pyramid_height=scaled_pyramid_height,
+                scaled_base_width=scaled_base_width,
+                nx=nx,
+                ny=ny,
+                orientation=orientation,
+                angle_axis=angle_axis,
+                resolution=resolution)
+        else:
+            x_start, x_stop, y_start, y_stop = 0, nx, 0, ny
+
+        self.absorber_window = (x_start, x_stop, y_start, y_stop)
+
+        if x_stop <= x_start or y_stop <= y_start:
+            print(f"Absorber at ({center_x_mm}, {center_y_mm}) mm falls outside the grid - skipped")
+            return eps_array[:0, :0].copy(), None
+
+        # Local working copy: the window instead of the whole epsilon map
+        absorber_array = eps_array[x_start:x_stop, y_start:y_stop].copy()
+
+        # Clipping bounds of the window. Pixel positions are computed in global
+        # coordinates exactly as before and only shifted by (x_start, y_start)
+        # when indexing, so a windowed run reproduces a full-map run bit for bit.
+        local_nx = x_stop - x_start
+        local_ny = y_stop - y_start
+
+        if self.local_region:
+            print(f"Absorber local window: x[{x_start}:{x_stop}], y[{y_start}:{y_stop}] "
+                  f"({local_nx}x{local_ny} px out of {nx}x{ny} px)")
+
+        # Substrate positions do not depend on the layer, so they are computed
+        # once here instead of once per layer.
         if add_substrate:
             # Convert single values to lists for uniform handling
             if substrate_thickness is not None and not isinstance(substrate_thickness, (list, tuple)):
@@ -2349,183 +2524,86 @@ class Absorbers:
             if substrate_thickness and substrate_material:
                 if len(substrate_thickness) != len(substrate_material):
                     raise ValueError("substrate_thickness and substrate_material lists must have same length")
-            
-            # Create empty lists to store the values of the centre, size, angle, material of the different substrates
-            centre_x_substrate = []
-            centre_y_substrate = []
-            size_x_substrate = []
-            size_y_substrate = []
-            angle_substrate = []
 
-        for layer in range(scaled_pyramid_height):
-            # Get alpha value from profile for this layer
-            # Calculating the index in the `alpha_profile` array that
-            # corresponds to the current layer of the pyramidal absorber being created.
-            profile_idx = min(int(layer / scaled_pyramid_height * len(alpha_profile)), len(alpha_profile) - 1)
-            alpha = alpha_profile[profile_idx]
-            
-            # Width varies based on filling factor
-            current_width = int(scaled_base_width * np.sqrt(alpha))
-            
-            # Layer count variable
-            layer_count = 0
+            (centre_x_substrate,
+             centre_y_substrate,
+             size_x_substrate,
+             size_y_substrate,
+             angle_substrate) = self._calculate_substrate_positions(orientation=orientation,
+                                                                    center_x=center_x,
+                                                                    center_y=center_y,
+                                                                    substrate_thickness=substrate_thickness,
+                                                                    substrate_material=substrate_material,
+                                                                    scaled_base_width=scaled_base_width,
+                                                                    resolution=resolution,
+                                                                    angle_axis=angle_axis)
 
-            
-            if orientation == "+y":
-                y_pos = center_y + layer
-                if 0 <= y_pos < scaled_grid_size_sy:
-                    for x in range(max(0, center_x - current_width//2), 
-                                min(scaled_grid_size_sx, center_x + current_width//2 + 1)):
+        # Width of every layer in one shot: alpha profile -> pixel width
+        alpha_profile = np.asarray(alpha_profile)
+        layers = np.arange(scaled_pyramid_height)
+        if scaled_pyramid_height > 0:
+            profile_idx = np.minimum(
+                (layers / scaled_pyramid_height * len(alpha_profile)).astype(int),
+                len(alpha_profile) - 1)
+            layer_widths = (scaled_base_width * np.sqrt(alpha_profile[profile_idx])).astype(int)
+        else:
+            layer_widths = np.empty(0, dtype=int)
+
+        if orientation in ("+y", "-y", "+x", "-x"):
+            step = 1 if orientation in ("+y", "+x") else -1
+            along_y = orientation in ("+y", "-y")
+
+            for layer, current_width in enumerate(layer_widths):
+                current_width = int(current_width)
+                half_width = current_width // 2
+
+                if along_y:
+                    y_pos = center_y + step * layer - y_start
+                    if 0 <= y_pos < local_ny:
                         # Material property varies with alpha (impedance matching)
-                        # absorber_array[y_pos, x] = material_value 
-                        absorber_array[x, y_pos] = material_value 
-                        
-                # Add substrate
-                if layer_count == 0:   
-                    if add_substrate:
-                        centre_x_substrate, centre_y_substrate, size_x_substrate, size_y_substrate, angle_substrate = self._calculate_substrate_positions(orientation=orientation,                                                                                                                                                 center_x=center_x,
-                                                                                                                                                    center_y=center_y,
-                                                                                                                                                    substrate_thickness=substrate_thickness,
-                                                                                                                                                    substrate_material=substrate_material,
-                                                                                                                                                    scaled_base_width=scaled_base_width,
-                                                                                                                                                    resolution=resolution,
-                                                                                                                                                    angle_axis=angle_axis)
-                
-                layer_count += 1
-                
-            elif orientation == "-y":
-                y_pos = center_y - layer
-                if 0 <= y_pos < scaled_grid_size_sy:
-                    for x in range(max(0, center_x - current_width//2), 
-                                min(scaled_grid_size_sx, center_x + current_width//2 + 1)):
-                        # Material property varies with alpha (impedance matching)
-                        # absorber_array[y_pos, x] = material_value
-                        absorber_array[x, y_pos] = material_value
-                        
-                # Add substrate
-                if layer_count == 0:   
-                    if add_substrate:
-                        centre_x_substrate, centre_y_substrate, size_x_substrate, size_y_substrate, angle_substrate = self._calculate_substrate_positions(orientation=orientation,
-                                                                                                                                                    center_x=center_x,
-                                                                                                                                                    center_y=center_y,
-                                                                                                                                                    substrate_thickness=substrate_thickness,
-                                                                                                                                                    substrate_material=substrate_material,
-                                                                                                                                                    scaled_base_width=scaled_base_width,
-                                                                                                                                                    resolution=resolution,
-                                                                                                                                                    angle_axis=angle_axis)
-                
-                layer_count += 1
-                
+                        x_lo = max(0, center_x - half_width - x_start)
+                        x_hi = min(local_nx, center_x + half_width + 1 - x_start)
+                        if x_hi > x_lo:
+                            absorber_array[x_lo:x_hi, y_pos] = material_value
+                else:
+                    x_pos = center_x + step * layer - x_start
+                    if 0 <= x_pos < local_nx:
+                        y_lo = max(0, center_y - half_width - y_start)
+                        y_hi = min(local_ny, center_y + half_width + 1 - y_start)
+                        if y_hi > y_lo:
+                            absorber_array[x_pos, y_lo:y_hi] = material_value
 
-            elif orientation == "+x":
-                x_pos = center_x + layer
-                if 0 <= x_pos < scaled_grid_size_sx:
-                    for y in range(max(0, center_y - current_width//2), 
-                                min(scaled_grid_size_sy, center_y + current_width//2 + 1)):
-                        # Material property varies with alpha (impedance matching)
-                        # absorber_array[y, x_pos] = material_value 
-                        absorber_array[x_pos, y] = material_value 
+        elif isinstance(orientation, float):
+            if angle_axis == "y":
+                # TODO: FIX THE BUG HERE!!
+                raise Warning("Y-axis orientation is not yet implemented yet!!")
+            elif angle_axis != "x":
+                raise ValueError("Invalid angle_axis, expected 'x' or 'y'")
 
-                # Add substrate                           
-                if layer_count == 0:   
-                    if add_substrate:
-                        centre_x_substrate, centre_y_substrate, size_x_substrate, size_y_substrate, angle_substrate = self._calculate_substrate_positions(orientation=orientation,
-                                                                                                                                                    center_x=center_x,
-                                                                                                                                                    center_y=center_y,
-                                                                                                                                                    substrate_thickness=substrate_thickness,
-                                                                                                                                                    substrate_material=substrate_material,
-                                                                                                                                                    scaled_base_width=scaled_base_width,
-                                                                                                                                                    resolution=resolution,
-                                                                                                                                                    angle_axis=angle_axis)                    
+            orientation_rad = np.radians(orientation)
+            cos_o = np.cos(orientation_rad)
+            sin_o = np.sin(orientation_rad)
+            # Direction perpendicular to the angle (for width)
+            perp_x = -sin_o
+            perp_y = cos_o
 
-                layer_count += 1
-                
-            elif orientation == "-x":
-                x_pos = center_x - layer
-                if 0 <= x_pos < scaled_grid_size_sx:
-                    for y in range(max(0, center_y - current_width//2), 
-                                min(scaled_grid_size_sy, center_y + current_width//2 + 1)):
-                        # Material property varies with alpha (impedance matching)
-                        # absorber_array[y, x_pos] = material_value
-                        absorber_array[x_pos, y] = material_value
+            for layer, current_width in enumerate(layer_widths):
+                current_width = int(current_width)
+                # Center position along the angled axis
+                x_pos = int(center_x + layer * cos_o)
+                y_pos = int(center_y + layer * sin_o)
 
-                # Add substrate       
-                if layer_count == 0:   
-                    if add_substrate:
+                # Draw the width perpendicular to the angle direction
+                w = np.arange(-current_width // 2, current_width // 2 + 1)
+                x_line = (x_pos + w * perp_x).astype(int) - x_start
+                y_line = (y_pos + w * perp_y).astype(int) - y_start
+                inside = ((x_line >= 0) & (x_line < local_nx) &
+                          (y_line >= 0) & (y_line < local_ny))
+                absorber_array[x_line[inside], y_line[inside]] = material_value
 
-                        centre_x_substrate, centre_y_substrate, size_x_substrate, size_y_substrate, angle_substrate = self._calculate_substrate_positions(orientation=orientation,
-                                                                                                                                                    center_x=center_x,
-                                                                                                                                                    center_y=center_y,
-                                                                                                                                                    substrate_thickness=substrate_thickness,
-                                                                                                                                                    substrate_material=substrate_material,
-                                                                                                                                                    scaled_base_width=scaled_base_width,
-                                                                                                                                                    resolution=resolution,
-                                                                                                                                                    angle_axis=angle_axis)
+        else:
+            raise ValueError("Invalid orientation type")
 
-                layer_count += 1
-                
-            elif isinstance(orientation, float):
-                orientation_rad = np.radians(orientation)
-                if angle_axis == "x":
-                    # Center position along the angled axis
-                    x_pos = int(center_x + layer * np.cos(orientation_rad))
-                    y_pos = int(center_y + layer * np.sin(orientation_rad))
-                    
-                    # Direction perpendicular to the angle (for width)
-                    perp_x = -np.sin(orientation_rad)
-                    perp_y = np.cos(orientation_rad)
-                    
-                    # Draw the width perpendicular to the angle direction
-                    for w in range(-current_width//2, current_width//2 + 1):
-                        x_line = int(x_pos + w * perp_x)
-                        y_line = int(y_pos + w * perp_y)
-                        if 0 <= x_line < scaled_grid_size_sx and 0 <= y_line < scaled_grid_size_sy:
-                            # absorber_array[y_line, x_line] = material_value
-                            absorber_array[x_line, y_line] = material_value
-
-                    # Add substrate
-                    if layer_count == 0:   
-                        if add_substrate:
-                            centre_x_substrate, centre_y_substrate, size_x_substrate, size_y_substrate, angle_substrate = self._calculate_substrate_positions(orientation=orientation,
-                                                                                                                                                        center_x=center_x,
-                                                                                                                                                        center_y=center_y,
-                                                                                                                                                        substrate_thickness=substrate_thickness,
-                                                                                                                                                        substrate_material=substrate_material,
-                                                                                                                                                        scaled_base_width=scaled_base_width,
-                                                                                                                                                        resolution=resolution,
-                                                                                                                                                        angle_axis=angle_axis)
-                                
-                elif angle_axis == "y":
-                    # TODO: FIX THE BUG HERE!!
-                    # # Center position along the angled axis
-                    # x_pos = int(center_x + layer * np.sin(orientation_rad))
-                    # y_pos = int(center_y + layer * np.cos(orientation_rad))
-                    
-                    # # Direction perpendicular to the angle (for width)
-                    # perp_x = np.cos(orientation_rad)
-                    # perp_y = -np.sin(orientation_rad)
-                    
-                    # # Draw the width perpendicular to the angle direction
-                    # for w in range(-current_width//2, current_width//2 + 1):
-                    #     x_line = int(x_pos + w * perp_x)
-                    #     y_line = int(y_pos + w * perp_y)
-                    #     if 0 <= x_line < scaled_grid_size_sx and 0 <= y_line < scaled_grid_size_sy:
-                    #         absorber_array[y_line, x_line] = material_value 
-
-                    # if layer_count == 0:   
-                    #     if add_substrate:
-                    #         centre_x_substrate = center_x - (substrate_thickness/2)*resolution*np.cos(orientation_rad)
-                    #         centre_y_substrate = center_y - (substrate_thickness/2)*resolution*np.sin(orientation_rad)
-                    #         size_x_substrate = substrate_thickness * resolution
-                    #         size_y_substrate = scaled_base_width
-                    #         angle_substrate = orientation  
-                    raise Warning("Y-axis orientation is not yet implemented yet!!")
-
-                layer_count += 1
-                
-            else:
-                raise ValueError("Invalid orientation type")
-            
         if add_substrate:
             import meepsat.meep_geometry as comp_meep
             for i in range(len(substrate_thickness)):
@@ -2556,6 +2634,8 @@ class Absorbers:
                 self.geometry_objects.append(substrate)
         
         # TRIANGULAR MESHGRID inside the absorber
+        # x_offset_px/y_offset_px put the mesh of the local window back into
+        # the global (mm) coordinate system of the full grid.
         tri = mesh._create_triangular_mesh(epsilon_array= absorber_array.T,
                                     epsilon_val= material_value,
                                     grid_size_sx= grid_size_sx,
@@ -2563,7 +2643,11 @@ class Absorbers:
                                     resolution= resolution,
                                     filter_option="min",
                                     plot= self.plot_mesh,
-                                    figname= self.savepath + 'absorber_triangular_mesh.png')
+                                    figname= self.savepath + 'absorber_triangular_mesh.png',
+                                    x_offset_px= x_start,
+                                    y_offset_px= y_start)
+
+        self.absorber_windows.append((self.absorber_window, absorber_array))
 
         return absorber_array, tri
 

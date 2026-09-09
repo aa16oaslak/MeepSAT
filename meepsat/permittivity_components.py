@@ -98,9 +98,16 @@ class AsphericLens(object):
             Higher-order aspheric coefficients for right surface (Currently supported for the first 3 coefficients)
             (default : None)
         x : float, optional
-            Position of center of left surface along x axis (default : 0)
+            Position of the centre of the left surface along the x axis,
+            given in MEEP coordinates, i.e. with (0, 0) at the centre of the
+            full cell (PML included), so x runs over
+            (-cell_size_x/2, +cell_size_x/2). (default : 0)
         y : float, optional
-            Position of center of left surface along y axis (default : 0)
+            Position of the centre of the left surface along the y axis,
+            given in MEEP coordinates, i.e. with (0, 0) at the centre of the
+            full cell (PML included), so y runs over
+            (-cell_size_y/2, +cell_size_y/2). y = 0 puts the optical axis of
+            the lens on the axis of the cell. (default : 0)
         n_refr : float, optional
             Index of refraction of the lens. 
             Set to HDPE by default.
@@ -255,6 +262,16 @@ class AsphericLens(object):
         # 2 times because there's pml on both sides
         self.size_x, self.size_y, self.size_z = mpsat_sim.cell_size[0] - 2*self.dpml, mpsat_sim.cell_size[1] - 2*self.dpml, mpsat_sim.cell_size[2]
         self.mpsat_sim = mpsat_sim # ~ MEEPSAT object
+
+        # ~ COORDINATE CONVENTION ~ #
+        # self.x, self.y are given in MEEP coordinates, i.e. (0,0) at the centre
+        # of the full cell (PML included). The permittivity map, on the other
+        # hand, is indexed from the bottom-left corner of that same cell, so a
+        # MEEP coordinate maps onto a pixel index as
+        #     pixel = (coord + half_cell) * res
+        # where half_cell is half the *full* cell size along that axis.
+        self.half_cell_x = self.size_x/2 + self.dpml
+        self.half_cell_y = self.size_y/2 + self.dpml
 
         #TESTING IMPORTED DEFORMED PROFILE AS CSV
         #deform = []
@@ -499,14 +516,17 @@ class AsphericLens(object):
                         #The center of the lens can be anywhere on the y axis
                         y0 = np.random.randint(low = low, high = high)
                     
+                        #Distance of this row from the optical axis of the lens
+                        y_axis_off = y0/res - (component.y + self.half_cell_y)
+
                         #Left surface sag
                         x_left = np.int64(np.around((
-                            component.left_surface(y0/res - self.size_y/2) + 
-                            component.x)*res))
+                            component.left_surface(y_axis_off) + 
+                            component.x + self.half_cell_x)*res))
                         #Right surface sag       
                         x_right = np.int64(np.around((
-                            component.right_surface(y0/res - self.size_y/2) + 
-                            component.x)*res + 
+                            component.right_surface(y_axis_off) + 
+                            component.x + self.half_cell_x)*res + 
                             thick))
 
                         #The center of the cluster has to be inside the lens
@@ -570,9 +590,9 @@ class AsphericLens(object):
             Resolution of map
         '''
 
-        # The y axis has its zero in the middle of the cell, the offset
-        # is mid_y
-        mid_y = np.int64(self.size_y*res/2)
+        # Pixel index of the lens optical axis. comp.y is in MEEP coordinates
+        # (zero at the centre of the cell), so the offset is half the full cell.
+        axis_y = np.int64(np.around((comp.y + self.half_cell_y)*res))
 
         #Thickness of the lens on optical axis
         thick = comp.thick*res
@@ -604,18 +624,26 @@ class AsphericLens(object):
 
             #Left surface sag
             x_left = np.int64(np.around((
-                        comp.left_surface(y_res/res) + self.dpml + 
-                        comp.x - comp.cust_def((y_res+mid_y)/res))*res))
+                        comp.left_surface(y_res/res) + self.half_cell_x + 
+                        comp.x - comp.cust_def(y_res/res))*res))
             #Right surface sag       
             x_right = np.int64(np.around((
                         comp.right_surface(y_res/res) + 
-                        comp.x + self.dpml -
-                        comp.cust_def((y_res+mid_y)/res))*res + 
+                        comp.x + self.half_cell_x -
+                        comp.cust_def(y_res/res))*res + 
                         thick))
             
             #Above and below the optical axis :
-            y_positive = int(self.dpml*res + mid_y + y_res)
-            y_negative = int(self.dpml*res + mid_y - y_res)
+            y_positive = int(axis_y + y_res)
+            y_negative = int(axis_y - y_res)
+
+            #Only write rows that actually land inside the map, otherwise a
+            #lens placed near/past the cell edge would wrap around the array.
+            #The centre line is written once, on the negative branch.
+            write_neg = 0 <= y_negative < eps_map.shape[1]
+            write_pos = y_res != 0 and 0 <= y_positive < eps_map.shape[1]
+            if not (write_neg or write_pos):
+                continue
 
             #Get the delamination as a function of y on left surface
             delam_pos_L = np.int64(np.around(res*
@@ -636,7 +664,7 @@ class AsphericLens(object):
             if radial_slope != 0 or axial_slope != 0 : 
             
                 eps0 = comp.eps
-                x0 = np.int64(np.around(comp.x*res))
+                x0 = np.int64(np.around((comp.x + self.half_cell_x)*res))
                 x_range = range(x_left, x_right+1) 
                 #The value is squared as the permittivity is index squared
                 eps_line = [eps0 + 
@@ -662,10 +690,11 @@ class AsphericLens(object):
 
 
             #Write lens between left and right surface below optical axis
-            eps_map[x_left_neg: x_right_neg+1, y_negative] *= eps_line
+            if write_neg :
+                eps_map[x_left_neg: x_right_neg+1, y_negative] *= eps_line
             
             #So that the center line is not affected twice :
-            if y_res != 0 :
+            if write_pos :
                 #Write lens between left and right surface above optical axis
                 eps_map[x_left_pos: x_right_pos+1, y_positive] *= eps_line
             
@@ -674,10 +703,11 @@ class AsphericLens(object):
 
                 AR_thick = np.int64(np.around(comp.AR_left*res))
 
-                eps_map[x_left_neg - AR_thick - delam_neg_L: x_left_neg - 
-                        delam_neg_L, y_negative] *= comp.AR_material
+                if write_neg :
+                    eps_map[x_left_neg - AR_thick - delam_neg_L: x_left_neg - 
+                            delam_neg_L, y_negative] *= comp.AR_material
 
-                if y_res != 0 :
+                if write_pos :
                     eps_map[x_left_pos - AR_thick - delam_pos_L: x_left_pos - 
                             delam_pos_L, y_positive] *= comp.AR_material
             
@@ -686,10 +716,11 @@ class AsphericLens(object):
                 
                 AR_thick = np.int64(np.around(comp.AR_right*res))
 
-                eps_map[x_right_neg + 1 + delam_neg_R: AR_thick + x_right_neg + 
-                        1 + delam_neg_R, y_negative] *= comp.AR_material
+                if write_neg :
+                    eps_map[x_right_neg + 1 + delam_neg_R: AR_thick + x_right_neg + 
+                            1 + delam_neg_R, y_negative] *= comp.AR_material
 
-                if y_res != 0 :
+                if write_pos :
                     eps_map[x_right_pos + 1 + delam_pos_R: AR_thick + 
                             x_right_pos + 1 + delam_pos_R, 
                             y_positive] *= comp.AR_material
@@ -711,13 +742,15 @@ class AsphericLens(object):
         Plots the permittivity map, where we can see only the lenses,
         allows to check their dispostion and shape
         '''
-        extent = (0, 
-                  len(self.permittivity_map[:])/self.res,
-                  0,
-                  len(self.permittivity_map[:][0])/self.res)
+        # Axes in MEEP coordinates, i.e. (0,0) at the centre of the full cell
+        extent = (-self.half_cell_x,
+                  len(self.permittivity_map[:])/self.res - self.half_cell_x,
+                  -self.half_cell_y,
+                  len(self.permittivity_map[:][0])/self.res - self.half_cell_y)
         plt.figure(dpi = 150)
         plt.title('Permittivity map')
-        plt.imshow(self.permittivity_map.transpose(), extent = extent)
+        plt.imshow(self.permittivity_map.transpose(), extent = extent,
+                   origin = 'lower')
         if save:
             plt.savefig('Lenses.png')
         plt.show()
@@ -837,8 +870,9 @@ class AsphericLens(object):
         if AR_right_layers is not None and len(AR_right_layers) != len(AR_right_materials):
             raise ValueError("AR_right_layers and AR_right_materials must have the same length")
 
-        # The y axis has its zero in the middle of the cell, the offset is mid_y
-        mid_y = np.int64(self.size_y*res/2)
+        # Pixel index of the lens optical axis. comp.y is in MEEP coordinates
+        # (zero at the centre of the cell), so the offset is half the full cell.
+        axis_y = np.int64(np.around((comp.y + self.half_cell_y)*res))
 
         # Thickness of the lens on optical axis
         thick = comp.thick*res
@@ -869,18 +903,26 @@ class AsphericLens(object):
             
             # Left surface sag
             x_left = np.int64(np.around((
-                        comp.left_surface(y_res/res) + self.dpml + 
-                        comp.x - comp.cust_def((y_res+mid_y)/res))*res))
+                        comp.left_surface(y_res/res) + self.half_cell_x + 
+                        comp.x - comp.cust_def(y_res/res))*res))
             # Right surface sag       
             x_right = np.int64(np.around((
                         comp.right_surface(y_res/res) + 
-                        comp.x + self.dpml -
-                        comp.cust_def((y_res+mid_y)/res))*res + 
+                        comp.x + self.half_cell_x -
+                        comp.cust_def(y_res/res))*res + 
                         thick))
             
             # Above and below the optical axis:
-            y_positive = int(self.dpml*res + mid_y + y_res)
-            y_negative = int(self.dpml*res + mid_y - y_res)
+            y_positive = int(axis_y + y_res)
+            y_negative = int(axis_y - y_res)
+
+            # Only write rows that actually land inside the map, otherwise a
+            # lens placed near/past the cell edge would wrap around the array.
+            # The centre line is written once, on the negative branch.
+            write_neg = 0 <= y_negative < eps_map.shape[1]
+            write_pos = y_res != 0 and 0 <= y_positive < eps_map.shape[1]
+            if not (write_neg or write_pos):
+                continue
 
             # Get the delamination as a function of y on left surface
             delam_pos_L = np.int64(np.around(res*
@@ -900,7 +942,7 @@ class AsphericLens(object):
             axial_slope = comp.axial_slope/res
             if radial_slope != 0 or axial_slope != 0: 
                 eps0 = comp.eps
-                x0 = np.int64(np.around(comp.x*res))
+                x0 = np.int64(np.around((comp.x + self.half_cell_x)*res))
                 x_range = range(x_left, x_right+1) 
                 # The value is squared as the permittivity is index squared
                 eps_line = [eps0 + 
@@ -924,10 +966,11 @@ class AsphericLens(object):
             x_right_pos = int(x_right + err_right_pos)
 
             # Write lens between left and right surface below optical axis
-            eps_map[x_left_neg:x_right_neg+1, y_negative] *= eps_line
+            if write_neg:
+                eps_map[x_left_neg:x_right_neg+1, y_negative] *= eps_line
             
             # So that the center line is not affected twice:
-            if y_res != 0:
+            if write_pos:
                 # Write lens between left and right surface above optical axis
                 eps_map[x_left_pos:x_right_pos+1, y_positive] *= eps_line
             
@@ -942,10 +985,11 @@ class AsphericLens(object):
                     AR_thick = np.int64(np.around(layer_thick*res))
                     
                     # Below optical axis
-                    eps_map[start_pos_neg - AR_thick:start_pos_neg, y_negative] *= material
+                    if write_neg:
+                        eps_map[start_pos_neg - AR_thick:start_pos_neg, y_negative] *= material
                     
                     # Above optical axis (if not on axis)
-                    if y_res != 0:
+                    if write_pos:
                         eps_map[start_pos_pos - AR_thick:start_pos_pos, y_positive] *= material
                     
                     # Move starting position outward for next layer
@@ -963,10 +1007,11 @@ class AsphericLens(object):
                     AR_thick = np.int64(np.around(layer_thick*res))
                     
                     # Below optical axis
-                    eps_map[start_pos_neg:start_pos_neg + AR_thick, y_negative] *= material
+                    if write_neg:
+                        eps_map[start_pos_neg:start_pos_neg + AR_thick, y_negative] *= material
                     
                     # Above optical axis (if not on axis)
-                    if y_res != 0:
+                    if write_pos:
                         eps_map[start_pos_pos:start_pos_pos + AR_thick, y_positive] *= material
                     
                     # Move starting position outward for next layer
@@ -1210,7 +1255,7 @@ class AsphericLens(object):
         Extracts the x,y coordinates of the left and right lens surfaces,
         returns them in Meep units centered at (0,0).
         """
-        mid_y = np.int64(self.size_y * res / 2)
+        axis_y = np.int64(np.around((comp.y + self.half_cell_y) * res))
         thick = comp.thick * res
         radius = np.int64(comp.diameter * res / 2)
 
@@ -1229,15 +1274,15 @@ class AsphericLens(object):
         for y_res in range(radius):
             # print(f"Processing y_res: {y_res}")
             x_left = np.int64(np.around((
-                comp.left_surface(y_res / res) + self.dpml +
-                comp.x - comp.cust_def((y_res + mid_y) / res)) * res))
+                comp.left_surface(y_res / res) + self.half_cell_x +
+                comp.x - comp.cust_def(y_res / res)) * res))
             x_right = np.int64(np.around((
                 comp.right_surface(y_res / res) +
-                comp.x + self.dpml -
-                comp.cust_def((y_res + mid_y) / res)) * res + thick))
+                comp.x + self.half_cell_x -
+                comp.cust_def(y_res / res)) * res + thick))
 
-            y_positive = int(self.dpml * res + mid_y + y_res)
-            y_negative = int(self.dpml * res + mid_y - y_res)
+            y_positive = int(axis_y + y_res)
+            y_negative = int(axis_y - y_res)
 
             err_bin_idx = int(np.around(y_res / res / comp.surf_err_width))
             err_left_pos = int(err_left[err_bin_idx])
@@ -1363,12 +1408,11 @@ class AsphericLens(object):
 
     def write_lens_with_stepped_pyramid_ARC_v2(self, comp):
         """
-        In this version, we will assume that the lens surfaces are:
-        - Centered at (0,0), instead of at self.x and self.y
-        - We will first generate the lens sags for left and right surfaces centered at (0,0)
-        - Then self.x, self.y is given in the 0 to x,y coordinate system; convert this to -x/2 - x/2 and -y/2 - y/2 coordinates
-        - Do a coordinate shift for the lens sags in the (-x/2, x/2) and (-y/2, y/2) coordinate system 
-          (basically add the self.x and self.y coordinates in the (-x/2, x/2) and (-y/2, y/2) coordinate system)
+        In this version:
+        - The lens sags for the left and right surfaces are generated about (0,0)
+        - self.x, self.y are already in MEEP coordinates ((0,0) at the centre of
+          the full cell), which is the frame the returned ARC blocks live in, so
+          the sags only need shifting by self.x / self.y (no PML bookkeeping)
         - Expectation: The lens surfaces will be centered at the required physcial coordinates of the system, 
           and the ARC coating will be applied on the lens surfaces.
         """
@@ -1388,8 +1432,8 @@ class AsphericLens(object):
             # r = r/10
             return (y**2/r) / (1 + np.sqrt(1 - (1 + k)*y**2/r**2)) + A2 * y**2 + A3 * y**4 + A4 * y**6
 
-        # Defining the y array
-        y_arc_steps = np.arange(-self.diameter/2 + self.dpml - self.step_ARC_pitch/2, self.diameter/2 + self.step_ARC_pitch/2, self.step_ARC_pitch)
+        # Defining the y array, centred on the optical axis of the lens (self.y)
+        y_arc_steps = self.y + np.arange(-self.diameter/2 - self.step_ARC_pitch/2, self.diameter/2 + self.step_ARC_pitch/2, self.step_ARC_pitch)
         # start = -self.diameter / 2
         # stop = self.diameter / 2
         # step = self.step_ARC_pitch
@@ -1398,8 +1442,8 @@ class AsphericLens(object):
         # y_arc_steps = np.linspace(start, stop, num_points)
 
         # Extracting the left and right surface coordinates using the lens sag equations
-        x_left_arc_steps = even_asphere_lens_eqn(y_arc_steps, self.r1, self.c1, self.a1_coeffs[0], self.a1_coeffs[1], self.a1_coeffs[2]) + self.x - self.size_x/2 - comp.cust_def(y_arc_steps) + self.dpml + self.step_ARC_offset[0] #! Note: we need to check with cust_def
-        x_right_arc_steps = even_asphere_lens_eqn(y_arc_steps, self.r2, self.c2, self.a2_coeffs[0], self.a2_coeffs[1], self.a2_coeffs[2])  + self.x + self.thick - self.size_x/2 - comp.cust_def(y_arc_steps) + self.dpml + self.step_ARC_offset[1] #! Note: we need to check with cust_def
+        x_left_arc_steps = even_asphere_lens_eqn(y_arc_steps - self.y, self.r1, self.c1, self.a1_coeffs[0], self.a1_coeffs[1], self.a1_coeffs[2]) + self.x - comp.cust_def(y_arc_steps - self.y) + self.step_ARC_offset[0] #! Note: we need to check with cust_def
+        x_right_arc_steps = even_asphere_lens_eqn(y_arc_steps - self.y, self.r2, self.c2, self.a2_coeffs[0], self.a2_coeffs[1], self.a2_coeffs[2])  + self.x + self.thick - comp.cust_def(y_arc_steps - self.y) + self.step_ARC_offset[1] #! Note: we need to check with cust_def
 
         # Calculate the slope using scipy of each point by considering the adjacent points
         # from scipy.ndimage import gaussian_filter1d
