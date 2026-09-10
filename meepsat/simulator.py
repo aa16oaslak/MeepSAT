@@ -539,6 +539,31 @@ def required_resolution_map(epsilon,
             'valid': valid}
 
 
+def _ensure_material_sources_resolved(simulation):
+    """
+    Makes sure every source of permittivity in `simulation` is visible to
+    `Simulation.get_epsilon_grid`, building the structure if it is not.
+
+    `get_epsilon_grid` samples `geometry`, `extra_materials` and `default_material`.
+    Permittivity supplied through `epsilon_input_file` (how MeepSAT loads the lens
+    maps written by `write_h5file`) or through a `material_function` only reaches
+    those attributes once MEEP has built the structure: before `init_sim`,
+    `default_material` is still plain vacuum, so a map sampled at that point shows the
+    geometry objects alone and silently reports the file-based materials as vacuum.
+
+    Returns True if the simulation carries file- or function-based materials.
+    """
+    from_file = bool(getattr(simulation, 'epsilon_input_file', ''))
+    from_function = getattr(simulation, 'material_function', None) is not None
+
+    if (from_file or from_function) and simulation.structure is None:
+        print("Building the MEEP structure so that epsilon_input_file / "
+              "material_function materials are included in the resolution check.")
+        simulation.init_sim()
+
+    return from_file or from_function
+
+
 def _cell_sample_tics(simulation, sample_resolution):
     """
     Builds the 1D coordinate arrays spanning the MEEP cell at `sample_resolution`
@@ -580,10 +605,13 @@ def check_resolution(data,
     The permittivity is sampled from the MEEP geometry *at the source frequency*, so
     it is complex wherever a material is lossy, and both the oscillation and the
     attenuation length scale are resolved (see `required_resolution_map`). Sampling is
-    done with `Simulation.get_epsilon_grid`, which reads the geometry list directly:
-    it does not need the structure to have been built, so the check can be run before
-    committing to a high-resolution simulation, and it reports the materials as
-    specified rather than after subpixel smoothing.
+    done with `Simulation.get_epsilon_grid`, which reports the materials as specified
+    rather than after subpixel smoothing. It reads `geometry`, `extra_materials` and
+    `default_material`, so a structure made purely of geometry objects can be checked
+    without building anything. Permittivity that arrives through `epsilon_input_file`
+    (the HDF5 maps MeepSAT writes for its lenses) or a `material_function` only
+    becomes visible once the structure exists, so in that case the structure is built
+    first -- otherwise those materials would silently read back as vacuum.
 
     This matters for MeepSAT in particular because absorbers and lossy apertures are
     built with `D_conductivity` (epsilon'' = epsilon' * sigma_D / omega). MEEP applies
@@ -653,7 +681,9 @@ def check_resolution(data,
     # Sample the permittivity, once per frequency so that dispersive and conductive
     # materials are evaluated where they are actually being used.
     extent = None
+    materials_from_file = False
     if epsilon_map is None:
+        materials_from_file = _ensure_material_sources_resolved(simulation)
         if sample_resolution is None:
             sample_resolution = mpsat_sim.resolution
         xtics, ytics, ztics, extent = _cell_sample_tics(simulation, sample_resolution)
@@ -751,8 +781,16 @@ def check_resolution(data,
     if mpsat_sim.resolution < max_resolution:
         print(f"Current resolution {mpsat_sim.resolution} is less than the required "
               f"maximum resolution {max_resolution}. Updating resolution.")
+        previous_resolution = mpsat_sim.resolution
         mpsat_sim.resolution = int(np.ceil(max_resolution))
         data["simulation"]['primary_params']['resolution'] = mpsat_sim.resolution
+        if materials_from_file:
+            warnings.warn(
+                f"The permittivity read from epsilon_input_file was generated at "
+                f"resolution {previous_resolution}; raising the simulation resolution "
+                f"to {mpsat_sim.resolution} does not add any detail to it, since MEEP "
+                f"just interpolates the stored map onto the finer grid. Rebuild the "
+                f"epsilon map at the new resolution before running.")
         # Reciprocal of the shortest wavelength anywhere in the domain, max(n/lambda_0),
         # maximised over the requested frequencies since n itself is frequency
         # dependent. Kept under the existing 'smallest_freq' key for pipeline
