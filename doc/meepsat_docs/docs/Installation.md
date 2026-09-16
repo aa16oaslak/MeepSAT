@@ -317,13 +317,13 @@ From: ubuntu:24.04
 To build a container from the MeepSAT definition file, use:
 
 ```bash
-apptainer build meepsat.sif meepsat.def
+sudo apptainer build meepsat.sif meepsat.def
 ```
 
 or if using older Singularity syntax:
 
 ```bash
-singularity build meepsat.sif meepsat.def
+sudo singularity build meepsat.sif meepsat.def
 ```
 
 The above command creates a `meepsat.sif` file containing the complete MeepSAT environment with all dependencies. 
@@ -341,13 +341,13 @@ This is the cleanest and most reproducible approach. Simply modify your `.def` f
 You can convert your SIF to a writable sandbox directory and make changes:
 
 ```bash
-apptainer build --sandbox meepsat_sandbox/ meepsat.sif
+sudo apptainer build --sandbox meepsat_sandbox/ meepsat.sif
 ```
 
 This creates a writable directory structure instead of a read-only SIF file. You can enter the sandbox interactively and edit the segments of your code:
 
 ```bash
-apptainer shell --writable meepsat_sandbox/
+sudo apptainer shell --writable meepsat_sandbox/
 ```
 
 `NOTE`: Generally the base code of MeepSAT is located at `meepsat_sandbox/meep/venv/lib/python3.12/site-packages/meepsat`
@@ -367,5 +367,5 @@ Inside the sandbox, you can:
 Once you're satisfied with your changes, convert it back to a SIF file:
 
 ```bash
-apptainer build meepsat_updated.sif meepsat_sandbox/
+sudo apptainer build meepsat_updated.sif meepsat_sandbox/
 ```
