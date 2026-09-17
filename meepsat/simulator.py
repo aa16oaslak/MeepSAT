@@ -16,6 +16,7 @@ import h5py
 import meepsat.meep_geometry as comp 
 import meepsat.permittivity_components as comp_eps 
 import meepsat.helpers as exf 
+import meepsat.precision as mpsat_precision
 
 
 def calculate_runtime_parameters(source_freq, resolution, steady_state_time, animation_timestep,
@@ -209,7 +210,8 @@ def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_na
         # Save the epsilon map to an HDF5 file
         h5_filename = os.path.join(savepath, f"{filename_prefix}.h5")
         with h5py.File(h5_filename, "w") as h5file:
-            h5file.create_dataset(epsilon_data_name, data=epsilon)
+            h5file.create_dataset(epsilon_data_name,
+                                  data=np.asarray(epsilon, dtype=mpsat_precision.real_dtype()))
         
         print(f"Epsilon plot saved to: {os.path.join(savepath, filename_prefix)}.png")
         print(f"Epsilon data saved to: {h5_filename}")
@@ -250,18 +252,21 @@ def complex_refractive_index(epsilon):
         Real part of the complex refractive index, sqrt((|eps| + Re eps)/2).
     kappa : np.ndarray
         Extinction coefficient, sqrt((|eps| - Re eps)/2).
+
+    Both are returned in the MeepSAT working precision (see `meepsat.precision`).
     """
-    eps = np.asarray(epsilon, dtype=np.complex128)
-    eps_real = eps.real
+    eps = np.asarray(epsilon, dtype=mpsat_precision.complex_dtype())
+    # The principal square root is n + i*kappa up to the sign of the imaginary part.
+    # It is used instead of the closed forms above because sqrt((|eps| - Re eps)/2)
+    # cancels catastrophically for a weakly lossy dielectric: in float32 |eps| and
+    # Re(eps) round to the same value and kappa would come out as exactly zero.
+    root = np.sqrt(eps)
+    n = np.ascontiguousarray(root.real)
     # MEEP works in the exp(-i*omega*t) convention, so a lossy material carries
     # Im(epsilon) > 0. Taking the modulus keeps the result meaningful for a map
     # supplied in the opposite convention, since loss and gain give the same |kappa|.
-    eps_imag = np.abs(eps.imag)
-
-    modulus = np.hypot(eps_real, eps_imag)
-    # Both brackets are non-negative analytically; the clip only absorbs round-off.
-    n = np.sqrt(np.clip(0.5 * (modulus + eps_real), 0.0, None))
-    kappa = np.sqrt(np.clip(0.5 * (modulus - eps_real), 0.0, None))
+    kappa = np.abs(root.imag)
+    del root
     return n, kappa
 
 
@@ -309,13 +314,16 @@ def required_resolution_map(epsilon,
         'n', 'kappa'      : the complex refractive index components
         'valid'           : boolean mask of usable samples (finite and not PEC)
     """
-    eps = np.asarray(epsilon, dtype=np.complex128)
+    eps = np.asarray(epsilon, dtype=mpsat_precision.complex_dtype())
     n, kappa = complex_refractive_index(eps)
 
     valid = (np.isfinite(eps.real) & np.isfinite(eps.imag)
              & (np.abs(eps) < _PEC_EPS_THRESHOLD))
 
-    # lambda_0 = 1/freq, so both criteria pick up a factor of freq.
+    # lambda_0 = 1/freq, so both criteria pick up a factor of freq. A Python float
+    # keeps the maps in the working precision; a NumPy float64 scalar would
+    # promote float32 maps to float64.
+    freq = float(freq)
     res_wavelength = min_pixels_per_wavelength * n * freq
     res_skin_depth = min_pixels_per_skin_depth * 2.0 * np.pi * kappa * freq
 
@@ -463,6 +471,8 @@ def check_resolution(data,
     freqs = np.atleast_1d(np.asarray(source_freq, dtype=float)).ravel()
     if freqs.size == 0 or np.any(freqs <= 0):
         raise ValueError("source_freq must contain positive frequencies in MEEP units.")
+    # Python floats, so multiplying a float32 map by a frequency keeps it float32
+    freq_list = [float(f) for f in freqs]
 
     if epsilon_map is None and simulation is None:
         raise ValueError("Provide either a MEEP `simulation` to sample from, or a "
@@ -477,7 +487,11 @@ def check_resolution(data,
         if sample_resolution is None:
             sample_resolution = mpsat_sim.resolution
         xtics, ytics, ztics, extent = _cell_sample_tics(simulation, sample_resolution)
-        eps_maps = [simulation.get_epsilon_grid(xtics, ytics, ztics, frequency=f)
+        # get_epsilon_grid always returns complex128, whatever the MEEP build; cast
+        # each map as it arrives so only one complex128 copy exists at a time.
+        cdtype = mpsat_precision.complex_dtype()
+        eps_maps = [np.asarray(simulation.get_epsilon_grid(xtics, ytics, ztics, frequency=f),
+                               dtype=cdtype)
                     for f in freqs]
     else:
         eps_supplied = np.asarray(epsilon_map)
@@ -492,7 +506,7 @@ def check_resolution(data,
     per_freq = [required_resolution_map(eps, f,
                                         min_pixels_per_wavelength=min_pixels_per_wavelength,
                                         min_pixels_per_skin_depth=min_pixels_per_skin_depth)
-                for eps, f in zip(eps_maps, freqs)]
+                for eps, f in zip(eps_maps, freq_list)]
     stacked = np.stack([d['resolution_map'] for d in per_freq])
 
     with warnings.catch_warnings():
@@ -512,7 +526,7 @@ def check_resolution(data,
     binding = per_freq[binding_freq_idx]
     hot = np.unravel_index(np.nanargmax(binding['resolution_map']),
                            binding['resolution_map'].shape)
-    hot_eps = np.asarray(eps_maps[binding_freq_idx], dtype=np.complex128)[hot]
+    hot_eps = complex(np.asarray(eps_maps[binding_freq_idx])[hot])
     driver = ('skin depth' if binding['res_skin_depth'][hot] > binding['res_wavelength'][hot]
               else 'wavelength')
 
@@ -520,8 +534,8 @@ def check_resolution(data,
     # sqrt(Re epsilon) estimate is what a real-only map would have produced.
     valid_any = np.any(np.stack([d['valid'] for d in per_freq]), axis=0)
     naive = np.stack([min_pixels_per_wavelength
-                      * np.sqrt(np.clip(np.asarray(eps, dtype=np.complex128).real, 0.0, None)) * f
-                      for eps, f in zip(eps_maps, freqs)])
+                      * np.sqrt(np.clip(np.asarray(eps).real, 0.0, None)) * f
+                      for eps, f in zip(eps_maps, freq_list)])
     max_naive = np.nanmax(np.where(valid_any, naive, np.nan))
 
     n_excluded = int(np.sum(~valid_any))
@@ -540,7 +554,7 @@ def check_resolution(data,
               f"{max_resolution / max_naive:.2f}x too low.")
 
     if plot_map:
-        eps_plot = np.asarray(eps_maps[binding_freq_idx], dtype=np.complex128)
+        eps_plot = np.asarray(eps_maps[binding_freq_idx])
         if resolution_map.ndim != 2:
             warnings.warn(f"plot_map is only supported for 2D maps, got shape "
                           f"{resolution_map.shape}; skipping the figure.")
@@ -588,7 +602,7 @@ def check_resolution(data,
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
             inv_wavelength = np.stack([np.where(d['valid'], d['n'] * f, np.nan)
-                                       for d, f in zip(per_freq, freqs)])
+                                       for d, f in zip(per_freq, freq_list)])
             data["simulation"]['primary_params']['smallest_freq'] = float(
                 np.nanmax(inv_wavelength))
     else:
@@ -716,7 +730,8 @@ class sim_init():
                  boundary_layer_type: str = None,
                  boundary_layer_size: float = None,
                  factor_dpml: float = None,
-                 verbosity: int = 0):
+                 verbosity: int = 0,
+                 precision: str = "auto"):
         
         """ 
         Initialises the simulation parameters
@@ -755,7 +770,20 @@ class sim_init():
         factor_dpml : float
             Factor by which the boundary layer thickness is multiplied 
             `Current supported options available: Only for PML` 
+
+        precision : str
+            Numeric precision of every array MeepSAT allocates (epsilon maps,
+            resolution maps, field accumulators, saved outputs):
+            'float32', 'float64', or 'auto' (default) to match the MEEP build.
+            MEEP's own fields keep the precision MEEP was compiled with; asking
+            for a different one here is allowed but warned about.
+            See `meepsat.precision`.
         """        
+        # Set first: everything MeepSAT allocates from here on reads it back
+        self.precision = mpsat_precision.set_precision(precision)
+        self.real_dtype = mpsat_precision.real_dtype()
+        self.complex_dtype = mpsat_precision.complex_dtype()
+
         self.sim_name = sim_name
         #==================================
         if smallest_freq:
@@ -817,6 +845,7 @@ class sim_init():
         print(f"Boundary layer type: {self.boundary_layer_type}")
         print(f"Boundary layer size: {self.dpml}")
         print(f"Factor for PML boundary layer thickness: {self.factor_dpml}")
+        print(f"Precision: {self.precision} (MEEP build: {mpsat_precision.meep_precision()})")
 
 
     def list_components(self):

@@ -12,6 +12,8 @@ import pandas as pd
 import json
 from scipy import ndimage
 
+import meepsat.precision as mpsat_precision
+
 def get_complex_field(sim,
                         simres,
                         aper_size,
@@ -34,6 +36,7 @@ def get_complex_field(sim,
     n_iter = 60
     res = simres
     AP_size = aper_size
+    rdtype = mpsat_precision.real_dtype()
     
     # Get initial field to determine size
     efield = sim.get_array(center=mp.Vector3(aper_pos_x, 0), 
@@ -48,11 +51,11 @@ def get_complex_field(sim,
     
     try:
         # Create memory-mapped array on disk instead of RAM
-        e_field_evol = np.memmap(temp_file, dtype='float32', mode='w+', 
+        e_field_evol = np.memmap(temp_file, dtype=rdtype, mode='w+', 
                                   shape=(n_iter, n_points))
         e_field_evol[0] = efield
         
-        time = np.zeros(n_iter, dtype=np.float32)
+        time = np.zeros(n_iter, dtype=rdtype)
         time[0] = sim.meep_time()
         
         # Stack the electric field evolution (writes to disk, not RAM)
@@ -71,8 +74,8 @@ def get_complex_field(sim,
             return amp*np.cos(x*2*np.pi/wvl + phase)
         
         # Initialize amplitude and phase arrays
-        amplitude = np.zeros(n_points, dtype=np.float32)
-        phase = np.zeros(n_points, dtype=np.float32)
+        amplitude = np.zeros(n_points, dtype=rdtype)
+        phase = np.zeros(n_points, dtype=rdtype)
         
         # Fit amplitude and phase for each point
         # Data is loaded from disk only when accessed
@@ -97,7 +100,7 @@ def get_complex_field(sim,
         if os.path.exists(temp_dir):
             os.rmdir(temp_dir)
     
-    y = np.linspace(-AP_size/2, AP_size/2, n_points, dtype=np.float32)
+    y = np.linspace(-AP_size/2, AP_size/2, n_points, dtype=rdtype)
     
     # Plot if requested
     if plot_amp:
@@ -145,7 +148,7 @@ def save_epsilon_map(sim, filename, plot=True, parallel=False):
         Whether the code is running in parallel mode
     """
     print("Saving epsilon map...")
-    eps_data = sim.get_epsilon()
+    eps_data = np.asarray(sim.get_epsilon(), dtype=mpsat_precision.real_dtype())
     np.savez_compressed(f"{filename}_epsilon.npz", epsilon=eps_data)
     print(f"Epsilon data saved to {filename}_epsilon.npz")
     

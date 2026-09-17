@@ -125,6 +125,7 @@ Due to the complex dependencies of the MEEP FDTD software, it is highly recommen
         └── json_to_script.py                   # Functionalities to read the json component file and output the required python script 
         └── meep_goemetry.py                    # Different components of the Telescope creating using the basic MEEP objects
         └── permittivity_components.py          # Different complex components of the telescope created for the `input_epsilon_file` parameter in MEEP.Simulation()
+        └── precision.py                        # float32/float64 dtype of every array MeepSAT allocates, set via sim_init(precision=...)
         └── simulator.py                        # MeepSAT Simulator intialisation
         └── stepfunctions.py                    # Different utilities (such as animation, time-averaged field extraction etc) needed during the simulation
     └── examples

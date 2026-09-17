@@ -134,7 +134,8 @@ mpsat_sim = sim.sim_init(sim_name='{data["simulation"]["name"]}',
                         resolution= {data["simulation"]['primary_params']['resolution']},
                         boundary_layer_type= '{data['boundary_layers']['boundary']['type']}',
                         boundary_layer_size= {data['boundary_layers']['boundary']['size']},
-                        factor_dpml= {data['boundary_layers']['boundary']['factor_dpml']})
+                        factor_dpml= {data['boundary_layers']['boundary']['factor_dpml']},
+                        precision= '{data["simulation"]['primary_params'].get('precision', 'auto')}')
 
 # Print the simulation parameters
 mpsat_sim.print_simulation_parameters()
@@ -244,7 +245,7 @@ size_x, size_y, size_z = mpsat_sim.cell_size[0], mpsat_sim.cell_size[1], mpsat_s
 res = int(mpsat_sim.resolution)  # Ensure resolution is an integer
 # Create the epsilon map: total size of the simulation cell in all the axis multiplied by the resolution + 1
 epsilon_map = np.ones((int((size_x)*res+1), 
-                       int((size_y)*res+1)), dtype = 'float32')
+                       int((size_y)*res+1)), dtype = mpsat_sim.real_dtype)
 """
     return script
 

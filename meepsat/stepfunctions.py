@@ -126,6 +126,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import meep as mp
 
+import meepsat.precision as mpsat_precision
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -202,6 +204,11 @@ def _get_array_into(sim, component, vol=None, buf=None, cmplx=False):
     ``buf`` is only an optimisation (it avoids the malloc/free churn of one
     fresh full-cell array per call, and it is what makes an ``np.memmap``
     destination possible).  It never changes the returned values.
+
+    ``buf`` is only used when its dtype is exactly what the MEEP build stores.
+    MEEP writes into it without converting, so any other dtype does not raise:
+    it silently returns garbage (complex128 on a single-precision build) or
+    corrupts the heap (complex64 on a double-precision build).
     """
     kwargs = {"component": component}
     if vol is not None:
@@ -209,7 +216,9 @@ def _get_array_into(sim, component, vol=None, buf=None, cmplx=False):
     if cmplx:
         kwargs["cmplx"] = True
 
-    if buf is not None and _GET_ARRAY_ACCEPTS_ARR:
+    expected = (mpsat_precision.meep_complex_dtype() if cmplx
+                else mpsat_precision.meep_real_dtype())
+    if buf is not None and _GET_ARRAY_ACCEPTS_ARR and buf.dtype == expected:
         try:
             return sim.get_array(arr=buf, **kwargs)
         except (TypeError, ValueError):
@@ -703,6 +712,8 @@ def save_dft_fields(simulation):
     _mprint("[dft] extracting DFT arrays (one component at a time)...")
 
     shape_ds = [None]   # filled from the first fetched component
+    rdtype = mpsat_precision.real_dtype()
+    cdtype = mpsat_precision.complex_dtype()
 
     def _fetch_downsampled(comp):
         """Collective on all ranks; returns the downsampled array on master."""
@@ -716,8 +727,8 @@ def save_dft_fields(simulation):
         if full is None:
             if shape_ds[0] is None:
                 return None
-            return np.zeros(shape_ds[0], dtype=np.complex64)
-        small = _block_mean(np.asarray(full), dx, dy).astype(np.complex64)
+            return np.zeros(shape_ds[0], dtype=cdtype)
+        small = _block_mean(np.asarray(full), dx, dy).astype(cdtype)
         del full
         shape_ds[0] = small.shape
         return small
@@ -740,7 +751,7 @@ def save_dft_fields(simulation):
                 for suffix, part in (("real", small.real), ("imag", small.imag)):
                     with zf.open(f"{name}_{suffix}.npy", "w", force_zip64=True) as fh:
                         np.lib.format.write_array(
-                            fh, np.ascontiguousarray(part, dtype=np.float32),
+                            fh, np.ascontiguousarray(part, dtype=rdtype),
                             allow_pickle=False)
                 del small
             if zf is not None:
@@ -751,7 +762,7 @@ def save_dft_fields(simulation):
                     name = _COMPONENT_NAMES[comp]
                     if name in written:
                         continue
-                    zeros = np.zeros(shape_ds[0] or (1, 1), dtype=np.float32)
+                    zeros = np.zeros(shape_ds[0] or (1, 1), dtype=rdtype)
                     for suffix in ("real", "imag"):
                         with zf.open(f"{name}_{suffix}.npy", "w",
                                      force_zip64=True) as fh:
@@ -801,14 +812,20 @@ def _make_full_buffer(shape):
                   off the heap, at the cost of MEEP writing the slice to disk
                   every call -- only sane on node-local scratch.
       "none"   -> let MEEP allocate each time (v1 behaviour)
+
+    The buffer is complex in the precision MEEP was BUILD with, not the MeepSAT
+    working precision: MEEP writes into it without converting (see
+    ``_get_array_into``).  This used to be complex128 unconditionally, which on
+    a single-precision build filled every fetch after the first with garbage.
     """
     mode = _FIELD.get("buffer_mode", "auto")
     if mode == "auto":
         mode = "ram" if _GET_ARRAY_ACCEPTS_ARR else "none"
     if mode == "none" or not _GET_ARRAY_ACCEPTS_ARR:
         return None
+    dtype = mpsat_precision.meep_complex_dtype()
     if mode == "ram":
-        return np.zeros(shape, dtype=np.complex128)
+        return np.zeros(shape, dtype=dtype)
     if mode == "memmap":
         rank = 0
         try:
@@ -816,7 +833,7 @@ def _make_full_buffer(shape):
         except Exception:
             pass
         path = os.path.join(_acc_scratch_dir(), f"getarray_buf_rank{rank}.dat")
-        return np.memmap(path, dtype=np.complex128, mode="w+", shape=shape)
+        return np.memmap(path, dtype=dtype, mode="w+", shape=shape)
     raise ValueError(f"unknown buffer_mode: {mode}")
 
 
@@ -838,14 +855,16 @@ def accumulate_efield_and_hfield(simulation):
     What did we changed, and why?
       * only the components that can be non-zero are fetched (see
         ``active_components``) -- for a 2D Ez run that halves the work;
-      * the accumulators live on rank 0 ONLY, as float32 ``np.memmap`` pairs,
-        so they are neither replicated nranks times nor resident in RAM;
+      * the accumulators live on rank 0 ONLY, as ``np.memmap`` pairs in the
+        MeepSAT working precision (``meepsat.precision``), so they are neither
+        replicated nranks times nor resident in RAM;
       * ``_block_mean`` replaces ``downsample``, bounding the temporary instead
         of copying the whole grid;
       * one reusable scratch buffer per shape instead of a fresh allocation per
         component per step.
 
-    Parity with v1, measured rather than assumed: the accumulated SUMS are
+    Parity with v1 (which always accumulated complex64, i.e. what
+    ``precision="float32"`` gives here), measured rather than assumed: the accumulated SUMS are
     bit-identical (``_block_mean`` reproduces ``downsample`` exactly, and
     float32-real-pair accumulation rounds the same way as complex64
     accumulation).  The saved values differ from v1 by at most 1 float32 ULP,
@@ -885,7 +904,7 @@ def accumulate_efield_and_hfield(simulation):
         if _ACC["shape_ds"] is None:
             _ACC["shape_ds"] = small.shape
             _mprint(f"[accumulate] full {raw.shape} -> downsampled {small.shape}; "
-                    f"accumulators are rank-0 float32 memmaps")
+                    f"accumulators are rank-0 {mpsat_precision.get_precision()} memmaps")
 
         mr, mi = _acc_maps(comp, small.shape)
         mr += small.real
@@ -902,14 +921,15 @@ def accumulate_efield_and_hfield(simulation):
 
 
 def _acc_maps(comp, shape):
-    """Lazily create the rank-0 float32 memmap pair for one component."""
+    """Lazily create the rank-0 working-precision memmap pair for one component."""
     if comp not in _ACC["maps"]:
         name = _COMPONENT_NAMES[comp]
         d = _acc_scratch_dir()
+        dtype = mpsat_precision.real_dtype()
         mr = np.memmap(os.path.join(d, f"{name}_real.dat"),
-                       dtype=np.float32, mode="w+", shape=shape)
+                       dtype=dtype, mode="w+", shape=shape)
         mi = np.memmap(os.path.join(d, f"{name}_imag.dat"),
-                       dtype=np.float32, mode="w+", shape=shape)
+                       dtype=dtype, mode="w+", shape=shape)
         mr[:] = 0.0
         mi[:] = 0.0
         _ACC["maps"][comp] = (mr, mi)
@@ -942,7 +962,8 @@ def save_accumulated_fields(simulation=None):
     def member(comp, part):
         def _get():
             if comp not in _ACC["maps"]:
-                return np.zeros(shape, dtype=np.float32)   # provably-zero component
+                # provably-zero component
+                return np.zeros(shape, dtype=mpsat_precision.real_dtype())
             mr, mi = _ACC["maps"][comp]
             return np.asarray(mr if part == "real" else mi) / count
         return _get
@@ -1092,7 +1113,7 @@ def set_animation_params(anim_params: dict):
                      Requires ``force_complex_fields=True`` on the Simulation;
                      without it the imaginary part is zero and this silently
                      falls back to "real" (logged once per component).
-                     Cost: the complex fetch is complex128 rather than float64
+                     Cost: the complex fetch is twice the size of the real one
                      over the full cell, on every rank -- roughly 2x the
                      per-frame fetch.  It is still ONE fetch, and the dB maths
                      still runs after decimation, so this is about half of v1's

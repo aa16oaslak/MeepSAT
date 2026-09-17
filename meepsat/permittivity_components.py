@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib import rc
 
 import meepsat.helpers as exf
+import meepsat.precision as mpsat_precision
 
 # ----------------------------------- Aspheric Lens ----------------------------------- #
 class AsphericLens(object):
@@ -770,12 +771,17 @@ class AsphericLens(object):
             Name of the permittivity map file written. 
             Needs to be the same name given to the MEEP simulation
             (default : 'epsilon_map')
+
+        The map is stored in the MeepSAT working precision (`meepsat.precision`).
+        MEEP reads the file into float64 internally either way, so this only
+        sets the file size and the precision of the stored values.
         '''
         import os
         
         # Store the full path
         self.mapname = filename
         full_path = filename + '.h5'
+        dtype = mpsat_precision.real_dtype()
         
         if parallel:
             from mpi4py import MPI
@@ -796,8 +802,8 @@ class AsphericLens(object):
                     size_x = len(self.permittivity_map[:, 0])
                     size_y = len(self.permittivity_map[0, :])
                     dset = h.create_dataset('eps', (size_x, size_y), 
-                                            dtype='float32')
-                    dset[:, :] = self.permittivity_map.astype('float32')
+                                            dtype=dtype)
+                    dset[:, :] = np.asarray(self.permittivity_map, dtype=dtype)
                     h.flush()  # Ensure data is written to disk
                 
                 print(f"Rank 0: HDF5 file written to {os.path.abspath(full_path)}")
@@ -825,7 +831,7 @@ class AsphericLens(object):
                 size_x = len(self.permittivity_map[:, 0])
                 size_y = len(self.permittivity_map[0, :])
                 dset = h.create_dataset('eps', (size_x, size_y), 
-                                        dtype='float32', 
+                                        dtype=dtype, 
                                         compression='gzip')
                 dset[:, :] = self.permittivity_map
                 h.flush()  # Ensure data is written to disk
