@@ -13,6 +13,7 @@ import json
 from scipy import ndimage
 
 import meepsat.precision as mpsat_precision
+import meepsat.helpers as exf
 
 def get_complex_field(sim,
                         simres,
@@ -146,12 +147,25 @@ def save_epsilon_map(sim, filename, plot=True, parallel=False):
         Whether to generate and save a plot of the epsilon map
     parallel : bool
         Whether the code is running in parallel mode
+
+    MPI note:
+    --------
+    `get_epsilon` is COLLECTIVE and leaves a full-cell array on every rank, so it
+    is called on every rank. The cast, the compression and the file write are the
+    master rank's job alone -- every rank doing them meant N copies of the map
+    plus N processes writing one path at once. Returns None off the master rank.
     """
-    print("Saving epsilon map...")
-    eps_data = np.asarray(sim.get_epsilon(), dtype=mpsat_precision.real_dtype())
+    exf.mprint("Saving epsilon map...")
+    eps_raw = sim.get_epsilon()          # COLLECTIVE
+    if not exf.is_master():
+        del eps_raw
+        return None
+
+    eps_data = np.asarray(eps_raw, dtype=mpsat_precision.real_dtype())
+    del eps_raw
     np.savez_compressed(f"{filename}_epsilon.npz", epsilon=eps_data)
     print(f"Epsilon data saved to {filename}_epsilon.npz")
-    
+
     return eps_data
 
 # The go to verified function for calculating the far-field pattern from a 

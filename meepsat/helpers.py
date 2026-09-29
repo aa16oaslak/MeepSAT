@@ -1,9 +1,112 @@
 import sys
 import os
 import site
+import warnings
 from pathlib import Path
 from typing import Callable
 import numpy as np
+
+
+# =====================================================================
+# MPI helpers
+# =====================================================================
+#
+# Under ``mpirun -np N python script.py`` the WHOLE script runs N times, so
+# every full-cell array a MeepSAT module allocates is paid N times while MEEP's
+# own FDTD grid is split 1/N per rank. That is what makes the memory footprint
+# grow with the core count. These helpers are the single place the rest of the
+# package asks "am I the rank that should be doing this?".
+#
+# The rule for using them: a MEEP call that COMMUNICATES (``get_array``,
+# ``get_epsilon``, ``get_dft_array``, ``get_array_metadata``, ``init_sim``,
+# ``run``) must be made by EVERY rank or the job deadlocks. Only the work that
+# follows it -- the copies, the maths, the plotting, the file writing -- may be
+# guarded. Measured on this MEEP build: ``get_array_metadata`` is collective, and
+# ``get_epsilon_grid`` is rank-local ONLY for a structure made of geometry
+# objects -- with an ``epsilon_input_file`` it re-converts the filename on every
+# call and MEEP broadcasts that HDF5 read, so a master-only call hangs the job.
+# When in doubt, let every rank make the MEEP call and guard what follows.
+
+
+def _meep():
+    """Import meep lazily, so helpers stays importable without it."""
+    import meep as mp
+    return mp
+
+
+def is_master() -> bool:
+    """
+    True on the single job-wide master rank (rank 0), and in a serial run.
+
+    Prefers ``am_really_master`` over ``am_master``: with ``divide_parallel``
+    subgroups ``am_master()`` is true once *per subgroup*, so guarding a file
+    write with it would still give one writer per subgroup.
+    """
+    try:
+        mp = _meep()
+    except ImportError:
+        return True
+    try:
+        return bool(mp.am_really_master())
+    except AttributeError:
+        try:
+            return bool(mp.am_master())
+        except AttributeError:
+            return True
+
+
+def n_procs() -> int:
+    """Number of MPI ranks in this job (1 when not running under MPI)."""
+    try:
+        return int(_meep().count_processors())
+    except Exception:
+        return 1
+
+
+def mpi_rank() -> int:
+    """This process's MPI rank (0 when not running under MPI)."""
+    try:
+        return int(_meep().my_rank())
+    except Exception:
+        return 0
+
+
+def mprint(*args, **kwargs):
+    """``print()`` that only fires on the master rank."""
+    if is_master():
+        print(*args, **kwargs)
+
+
+def broadcast(value, root: int = 0):
+    """
+    Send a small picklable object from `root` to every rank.
+
+    Used to share the *scalars* a rank-0-only computation produced (a corrected
+    resolution, say) without shipping the full-cell arrays it derived them from.
+    Returns `value` unchanged in a serial run.
+    """
+    if n_procs() == 1:
+        return value
+    try:
+        from mpi4py import MPI
+    except ImportError:
+        warnings.warn(
+            "Running under MPI but mpi4py is not importable, so a rank-0 result "
+            "could not be broadcast to the other ranks. They will carry on with "
+            "their own (stale) values. Install mpi4py, or run in serial.")
+        return value
+    return MPI.COMM_WORLD.bcast(value, root=root)
+
+
+def barrier():
+    """Block until every rank arrives. No-op in a serial run."""
+    if n_procs() == 1:
+        return
+    try:
+        from mpi4py import MPI
+    except ImportError:
+        return
+    MPI.COMM_WORLD.barrier()
 
 # Used to remove the elements of a dictionary (dict_to_filter) that
 # don't correspond to the keyword arguments of a particular

@@ -758,31 +758,60 @@ class AsphericLens(object):
         plt.close()
     
 
-    def write_h5file(self, parallel=False, filename='epsilon_map'):
+    def write_h5file(self, parallel=False, filename='epsilon_map', free_map=False):
         '''
-        Writes the file that will then be 
+        Writes the file that will then be
         read within the MEEP simulation
 
         Arguments
         ---------
         parallel : bool, optional
-            If the computation is run in parallel (default : False)
+            If the computation is run in parallel (default : False).
+            Ignored when MeepSAT detects more than one MPI rank: the parallel
+            path is taken regardless, since letting every rank write the same
+            path concurrently produces a corrupt file.
         filename : str, optional
-            Name of the permittivity map file written. 
+            Name of the permittivity map file written.
             Needs to be the same name given to the MEEP simulation
             (default : 'epsilon_map')
+        free_map : bool, optional
+            Drop this object's reference to the permittivity map once it has been
+            written (default: False).
+
+            The map exists only to be handed to MEEP through this file, but every
+            rank builds and keeps its own copy, which costs 4-8 bytes per grid
+            cell per rank for the rest of the run. Pass True once the last
+            component has been rasterised. Note that whatever else still refers
+            to the same array -- typically the `epsilon_map` variable in your run
+            script -- keeps it alive, so `del epsilon_map` there too:
+
+                lens1_init.write_h5file(filename=..., parallel=True, free_map=True)
+                del epsilon_map
+
+            Do not pass True if you still want `plot_lenses()`, or a second
+            component writing into the same map.
 
         The map is stored in the MeepSAT working precision (`meepsat.precision`).
         MEEP reads the file into float64 internally either way, so this only
-        sets the file size and the precision of the stored values.
+        sets the file size and the precision of the stored values. Be aware that
+        MEEP then keeps that float64 copy of the whole map on EVERY rank for the
+        lifetime of the simulation, which `free_map` cannot do anything about --
+        only describing the optics as geometry objects instead of an
+        `epsilon_input_file` avoids it.
         '''
         import os
-        
+
         # Store the full path
         self.mapname = filename
         full_path = filename + '.h5'
         dtype = mpsat_precision.real_dtype()
-        
+
+        if not parallel and exf.n_procs() > 1:
+            exf.mprint(f"write_h5file: {exf.n_procs()} MPI ranks detected, so "
+                       f"writing {full_path} from rank 0 only (parallel=False was "
+                       f"requested, which would have had every rank write it).")
+            parallel = True
+
         if parallel:
             from mpi4py import MPI
             comm = MPI.COMM_WORLD
@@ -835,9 +864,13 @@ class AsphericLens(object):
                                         compression='gzip')
                 dset[:, :] = self.permittivity_map
                 h.flush()  # Ensure data is written to disk
-            
+
             print(f"HDF5 file written to {os.path.abspath(full_path)}")
-    
+
+        if free_map:
+            # The file is on disk now; MEEP reads the optics from there.
+            self.permittivity_map = None
+
 
     def write_lens_nARC(self, comp, eps_map, res, 
                     AR_left_layers=None, AR_left_materials=None,

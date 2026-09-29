@@ -141,15 +141,32 @@ def plot_and_save_epsilon(simulation, savepath, filename_prefix, epsilon_data_na
     Returns:
     --------
     epsilon : np.ndarray (optional)
-        The extracted epsilon array if return_epsilon=True
+        The extracted epsilon array if return_epsilon=True. Under MPI this is
+        returned on the master rank only; every other rank gets None, because
+        the whole point of the guard below is not to keep that array on them.
+
+    MPI note:
+    --------
+    `simulation.run` and `simulation.get_epsilon` are COLLECTIVE, so they run on
+    every rank -- `get_epsilon` leaves a full-cell copy on each one. Everything
+    after that (a spline-interpolated figure of the full map, the PNG, the HDF5
+    file) used to run on every rank too, which cost ~70 bytes per grid cell per
+    rank and had all of them writing the same two output paths at once. Only the
+    master rank does that work now; the others drop the array immediately.
     """
     import matplotlib.pyplot as plt
     from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     # Run simulation briefly to get epsilon
-    simulation.run(until=0)
-    epsilon = simulation.get_epsilon()
-    
+    simulation.run(until=0)          # COLLECTIVE
+    epsilon = simulation.get_epsilon()   # COLLECTIVE: full cell on EVERY rank
+
+    if not exf.is_master():
+        # Nothing below this line communicates, so the non-master ranks are free
+        # to let go of the full-cell array right now instead of plotting it.
+        del epsilon
+        return None
+
     # Extract PML thickness if not provided
     if plot_pml and pml_thickness is None:
         # Try to get PML thickness from simulation
@@ -384,6 +401,30 @@ def _cell_sample_tics(simulation, sample_resolution):
     return tics[0], tics[1], tics[2], extent
 
 
+def _apply_resolution_update(update, mpsat_sim, data):
+    """
+    Apply the scalars `check_resolution` derived on the master rank.
+
+    Kept separate so the master and the other ranks provably apply the same
+    thing: the master passes the dict it just computed, the others pass the one
+    they received from `helpers.broadcast`. An empty (or None) update means the
+    resolution already was sufficient.
+    """
+    if not update:
+        return mpsat_sim, data
+    if '__error__' in update:
+        # The master failed where only it could see it; fail here too rather than
+        # carrying on with an unchecked resolution.
+        raise ValueError(f"check_resolution failed on the master rank: "
+                         f"{update['__error__']}")
+    if 'resolution' in update:
+        mpsat_sim.resolution = update['resolution']
+        data["simulation"]['primary_params']['resolution'] = update['resolution']
+    if 'smallest_freq' in update:
+        data["simulation"]['primary_params']['smallest_freq'] = update['smallest_freq']
+    return mpsat_sim, data
+
+
 def check_resolution(data,
                     mpsat_sim,
                     min_pixels_per_wavelength=8,
@@ -458,11 +499,41 @@ def check_resolution(data,
     Returns:
     -------
     mpsat_sim, data,
-        Updated simulation object and configuration data.
+        Updated simulation object and configuration data. Both carry the
+        corrected resolution on EVERY rank.
     resolution_map : np.array
         Minimum required resolution at each point, NaN inside perfect conductors.
+        Master rank only; None on the others (see the MPI note).
     diagnostics : dict, optional
-        Only returned when `return_diagnostics` is True.
+        Only returned when `return_diagnostics` is True, and only populated on
+        the master rank.
+
+    MPI note:
+    --------
+    This check used to be the single largest memory spike in a parallel run:
+    ~90 bytes per grid cell on EVERY rank, because `get_epsilon_grid` samples
+    the whole cell in complex128 and `required_resolution_map` derives half a
+    dozen full-cell maps from it, none of which MEEP distributes.
+
+    The map arithmetic now happens on the master rank alone and only the
+    *scalars* that come out of it -- the corrected resolution and 'smallest_freq'
+    -- are broadcast, so `mpsat_sim` and `data` still come back updated on every
+    rank.
+
+    Two things in here are collective and deliberately stay outside that guard:
+    `_ensure_material_sources_resolved`, which may trigger `init_sim()`; and, when
+    the permittivity comes from `epsilon_input_file` or a `material_function`, the
+    `get_epsilon_grid` sampling itself, because converting the file material
+    broadcasts the map from rank 0. Sampling a structure built from geometry
+    objects is rank-local and is skipped on the other ranks entirely.
+
+    Caveat that comes with computing on one rank: if the master raises *after*
+    the other ranks have reached their broadcast, they wait for a message that
+    never arrives and the job hangs rather than crashing. The one expected
+    failure (no usable samples) is forwarded to them explicitly; an unexpected
+    one, say a matplotlib error under `plot_map=True`, is not. If a parallel run
+    ever stalls inside this function, run the same case in serial to see the real
+    traceback.
     """
     if source_freq is None:
         raise ValueError("source_freq is required to convert the permittivity map "
@@ -478,15 +549,50 @@ def check_resolution(data,
         raise ValueError("Provide either a MEEP `simulation` to sample from, or a "
                          "pre-computed `epsilon_map`.")
 
-    # Sample the permittivity, once per frequency so that dispersive and conductive
-    # materials are evaluated where they are actually being used.
-    extent = None
+    # COLLECTIVE, so it stays outside the master guard below: this may call
+    # init_sim() to make epsilon_input_file / material_function materials visible,
+    # and every rank has to take part in building the structure.
     materials_from_file = False
     if epsilon_map is None:
         materials_from_file = _ensure_material_sources_resolved(simulation)
+
+    # Is the sampling itself safe to do on the master alone?
+    #
+    # `get_epsilon_grid` is rank-local for a structure made of geometry objects.
+    # It is NOT rank-local when the permittivity comes from `epsilon_input_file`:
+    # `simulation.default_material` is then still the filename, so every call
+    # re-converts it with MEEP's `make_file_material`, whose HDF5 read is served
+    # by rank 0 and broadcast to the others. A master-only call would hang the
+    # job there (measured: an 8-rank run deadlocks in exactly that spot). So in
+    # that case every rank samples, as before, and only the derived maps -- the
+    # bulk of the cost -- are confined to the master.
+    sample_on_every_rank = epsilon_map is None and materials_from_file
+
+    extent = None
+    xtics = ytics = ztics = None
+    if epsilon_map is None:
         if sample_resolution is None:
             sample_resolution = mpsat_sim.resolution
         xtics, ytics, ztics, extent = _cell_sample_tics(simulation, sample_resolution)
+
+    if not exf.is_master():
+        if sample_on_every_rank:
+            # Take part in the collective read inside each call, then drop the
+            # sample: one call per frequency, matching the master's loop below.
+            for f in freqs:
+                discard = simulation.get_epsilon_grid(xtics, ytics, ztics, frequency=f)
+                del discard
+        # The rest is rank-local arithmetic over half a dozen full-cell maps.
+        # Repeating it here would multiply the peak by the rank count to compute
+        # an answer we are about to be handed, so wait for the master's verdict.
+        _apply_resolution_update(exf.broadcast(None), mpsat_sim, data)
+        if return_diagnostics:
+            return mpsat_sim, data, None, None
+        return mpsat_sim, data, None
+
+    # Sample the permittivity, once per frequency so that dispersive and conductive
+    # materials are evaluated where they are actually being used.
+    if epsilon_map is None:
         # get_epsilon_grid always returns complex128, whatever the MEEP build; cast
         # each map as it arrives so only one complex128 copy exists at a time.
         cdtype = mpsat_precision.complex_dtype()
@@ -516,8 +622,13 @@ def check_resolution(data,
         resolution_map = np.nanmax(stacked, axis=0)
 
     if not np.any(np.isfinite(resolution_map)):
-        raise ValueError("No usable permittivity samples: every point is a perfect "
-                         "conductor or non-finite, so no resolution can be derived.")
+        # Only this rank got here, and the others are waiting in the broadcast
+        # below. Send them the failure so the whole job fails together instead of
+        # hanging on a rank that is never going to arrive.
+        msg = ("No usable permittivity samples: every point is a perfect "
+               "conductor or non-finite, so no resolution can be derived.")
+        exf.broadcast({'__error__': msg})
+        raise ValueError(msg)
 
     max_resolution = np.nanmax(resolution_map)
 
@@ -582,17 +693,17 @@ def check_resolution(data,
             plt.close(fig)
 
     # Edit the data dictionary to update the resolution if needed
+    update = {}
     if mpsat_sim.resolution < max_resolution:
         print(f"Current resolution {mpsat_sim.resolution} is less than the required "
               f"maximum resolution {max_resolution}. Updating resolution.")
         previous_resolution = mpsat_sim.resolution
-        mpsat_sim.resolution = int(np.ceil(max_resolution))
-        data["simulation"]['primary_params']['resolution'] = mpsat_sim.resolution
+        update['resolution'] = int(np.ceil(max_resolution))
         if materials_from_file:
             warnings.warn(
                 f"The permittivity read from epsilon_input_file was generated at "
                 f"resolution {previous_resolution}; raising the simulation resolution "
-                f"to {mpsat_sim.resolution} does not add any detail to it, since MEEP "
+                f"to {update['resolution']} does not add any detail to it, since MEEP "
                 f"just interpolates the stored map onto the finer grid. Rebuild the "
                 f"epsilon map at the new resolution before running.")
         # Reciprocal of the shortest wavelength anywhere in the domain, max(n/lambda_0),
@@ -603,10 +714,15 @@ def check_resolution(data,
             warnings.simplefilter('ignore', category=RuntimeWarning)
             inv_wavelength = np.stack([np.where(d['valid'], d['n'] * f, np.nan)
                                        for d, f in zip(per_freq, freq_list)])
-            data["simulation"]['primary_params']['smallest_freq'] = float(
-                np.nanmax(inv_wavelength))
+            update['smallest_freq'] = float(np.nanmax(inv_wavelength))
+            del inv_wavelength
     else:
         print(f"Current resolution {mpsat_sim.resolution} is sufficient for the simulation.")
+
+    # Hand the other ranks the scalars, not the maps they came from. The matching
+    # broadcast() on the non-master ranks is near the top of this function.
+    exf.broadcast(update)
+    _apply_resolution_update(update, mpsat_sim, data)
 
     if return_diagnostics:
         diagnostics = {'freqs': freqs,

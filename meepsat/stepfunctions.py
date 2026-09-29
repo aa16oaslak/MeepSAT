@@ -48,6 +48,22 @@ WHAT DID WE CHANGED IN THE LATEST VERSION (v2)?
     ``render_movie_from_h5`` renders the movie afterwards, keeping matplotlib
     out of the FDTD loop entirely.
 
+4) Two leftovers that still scaled with the RANK COUNT are gone (see
+    ``tests/memory_check.py``, which measures this per component):
+
+    * ``_make_full_buffer`` was allocating the reusable full-cell complex buffer
+      on EVERY rank, though only rank 0 ever consumes the slice.  That was
+      16 bytes per grid cell per rank held for the whole run -- 1.0 GB of an
+      8-rank 9 M cell run.  It is rank-0-only now; the other ranks let MEEP
+      allocate a transient per call.
+    * ``extract_xyzw`` did the block-summing of the weights, which allocates two
+      more full-cell-sized arrays, on every rank for a file only rank 0 writes.
+
+    What CANNOT be guarded away: ``get_array``, ``get_dft_array`` and
+    ``get_array_metadata`` are collective and hand every rank the full slice, so
+    a rank that skips one deadlocks the job.  Fetch less often, or over a smaller
+    volume, or use the DFT path -- do not guard the fetch itself.
+
 A PHYSICS NOTE THAT MATTERS MORE THAN THE MEMORY IN DFT FIELD ACCUMULATION
 --------------------------------------------------------------------------
 ``calculate_runtime_parameters`` in simulator.py deliberately makes the
@@ -127,6 +143,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import meep as mp
 
 import meepsat.precision as mpsat_precision
+import meepsat.helpers as exf
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -142,28 +159,20 @@ def _is_master() -> bool:
 
     Prefer ``am_really_master`` over ``am_master``: with ``divide_parallel``
     subgroups ``am_master()`` is true once *per subgroup*, which would still
-    give you N ffmpeg processes fighting over one output path.
+    give you N ffmpeg processes fighting over one output path. Shared with the
+    rest of the package through ``meepsat.helpers`` so there is one definition
+    of "the rank that does the work" rather than one per module.
     """
-    try:
-        return bool(mp.am_really_master())
-    except AttributeError:
-        try:
-            return bool(mp.am_master())
-        except AttributeError:
-            return True
+    return exf.is_master()
 
 
 def _nprocs() -> int:
-    try:
-        return int(mp.count_processors())
-    except Exception:
-        return 1
+    return exf.n_procs()
 
 
 def _mprint(*args, **kwargs):
     """print() that only fires on the master rank."""
-    if _is_master():
-        print(*args, **kwargs)
+    exf.mprint(*args, **kwargs)
 
 
 def _detect_get_array_arr_support() -> bool:
@@ -561,8 +570,16 @@ def extract_xyzw(simulation):
     dx = _FIELD["downsampling_factor_x"]
     dy = _FIELD["downsampling_factor_y"]
 
+    # COLLECTIVE -- measured on this MEEP build, a rank that skips it hangs the
+    # job. ``w`` comes back as a full-cell array on every rank as a result.
     x, y, z, w = simulation.get_array_metadata(vol=_full_volume())
     del z
+
+    if not _is_master():
+        # The block-summing below allocates two more full-cell-sized arrays, for
+        # a file only rank 0 writes.
+        del x, y, w
+        return
 
     xc = _block_centers(x, dx)
     yc = _block_centers(y, dy)
@@ -571,11 +588,10 @@ def extract_xyzw(simulation):
         w = np.asarray(w)[:n0 * dx, :n1 * dy]
         w = w.reshape(n0, dx, n1, dy).sum(axis=(1, 3))
 
-    if _is_master():
-        _savez_streaming(os.path.join(_FIELD["savepath"], "xyzw.npz"),
-                         [("x_coords", xc), ("y_coords", yc), ("weights", w)],
-                         compress=_FIELD["compress"])
-        _mprint(f"[xyzw] saved: x={xc.shape}, y={yc.shape}, w={np.shape(w)}")
+    _savez_streaming(os.path.join(_FIELD["savepath"], "xyzw.npz"),
+                     [("x_coords", xc), ("y_coords", yc), ("weights", w)],
+                     compress=_FIELD["compress"])
+    _mprint(f"[xyzw] saved: x={xc.shape}, y={yc.shape}, w={np.shape(w)}")
     return
 
 
@@ -884,13 +900,32 @@ def accumulate_efield_and_hfield(simulation):
         _ACC["components"] = active_components(
             simulation, force_all=_FIELD["force_all_components"])
         _mprint(f"[accumulate] downsampling by ({dx}, {dy})")
+        if _FIELD["method"] == "dft":
+            # Easy to get wrong: set_field_params(method="dft") only chooses the
+            # default; it is the step function you register with simulation.run()
+            # that decides which path executes. Registering this one means every
+            # sample still costs a collective full-cell fetch on every rank.
+            _mprint("[accumulate] NOTE: set_field_params has method='dft', but "
+                    "accumulate_efield_and_hfield is what is registered, so the "
+                    "per-step full-cell gather is still happening. To use the "
+                    "distributed path, call setup_dft_fields(simulation, "
+                    "freq=source_freq) before simulation.run() and register "
+                    "save_dft_fields with mp.at_end instead of this function "
+                    "and save_accumulated_fields.")
 
     for comp in _ACC["components"]:
         buf = _ACC["scratch"].get("full")
         raw = _get_array_into(simulation, comp, vol=vol, buf=buf, cmplx=True)
 
         if not _ACC["scratch"].get("full_checked"):
-            _ACC["scratch"]["full"] = _make_full_buffer(raw.shape)
+            # Rank 0 only. A reusable destination is worth holding where the
+            # slice is actually consumed, but on every other rank the next line
+            # throws the slice away, so keeping a full-cell complex buffer there
+            # for the whole run was 16 bytes per grid cell per rank of pure
+            # waste -- one of the costs that made the footprint grow with the
+            # core count. Those ranks let MEEP allocate a transient per call.
+            _ACC["scratch"]["full"] = (_make_full_buffer(raw.shape)
+                                       if _is_master() else None)
             _ACC["scratch"]["full_checked"] = True
 
         if not _is_master():
