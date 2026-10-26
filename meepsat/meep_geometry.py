@@ -254,6 +254,313 @@ def set_broadband_freq_wvl(self, central_wvl=None, wvl_min=None, wvl_max=None):
 # * ############################################################################################################
 
 ###& SOURCE
+# ~ Feedhorn Source from a beam profile
+from helpers import (C_MM_GHZ, PHI_COLORS, fit_gaussian, main_beam_mask, nearest_freq_indices, style_axes, waist_from_fwhm)
+
+class FeedhornPatternSource:
+    """Equivalent-current line source (along y) reproducing a feedhorn far-field cut in 2D MEEP."""
+
+    def __init__(self, theta, co_dB, co_phase, freq_ghz,
+                 center=(0, 0, 0),
+                 size=(0, 300, 0),
+                 component="Ez",
+                 angle=180,
+                 theta_max=80.0,
+                 points_per_wvl=16,
+                 conjugate_phase=True,
+                 amplitude=1.0,
+                 huygens_sign=1,
+                 kwargs=None,
+                 label=""):
+        """
+        Parameters
+        ----------
+        theta, co_dB, co_phase : arrays
+            One cut: theta from boresight [deg, 0..90], co-pol power [dB] and phase [deg].
+            The cut is taken as mirror-symmetric about boresight.
+        freq_ghz : float
+            Frequency of the cut [GHz]; the source runs at freq_ghz / C_MM_GHZ in MEEP units.
+        center, size : mp.Vector3 or 3-tuples
+            Source line in MEEP units (mm); the line must lie along y (size x = 0).
+        component : "Ez" or "Hz"
+            Out-of-plane field of the simulation (mp.Ez / mp.Hz also accepted).
+        angle : float
+            Beam axis direction w.r.t. +x [deg], as in comp_meep.GaussianBeam: 180 emits towards -x,
+            170 emits towards -x tilted by 10 deg.
+        theta_max : float
+            Plane waves beyond |theta_max| from the x axis are rolled off (raised cosine to 90 deg).
+        points_per_wvl : int
+            Sampling of the precomputed line profile.
+        conjugate_phase : bool
+            True if co_phase is quoted for exp(+j omega t) (engineering convention).
+        amplitude : float
+            Peak |F| on the line.
+        huygens_sign : +1 or -1
+            Multiplies the magnetic current; flip it if the back-radiated flux is not suppressed.
+        kwargs : dict
+            Extra arguments for mp.ContinuousSource (e.g. start_time, end_time, width).
+        """
+        self.theta = np.asarray(theta, float)
+        self.co_dB = np.asarray(co_dB, float)
+        phase = np.unwrap(np.radians(co_phase))
+        self.phase = -phase if conjugate_phase else phase  # [rad], exp(-i omega t) convention
+        self.cut_field = 10 ** (self.co_dB / 20) * np.exp(1j * self.phase)
+
+        self.freq_ghz = float(freq_ghz)
+        self.freq_meep = self.freq_ghz / C_MM_GHZ
+        self.wvl = 1.0 / self.freq_meep
+        self.k = 2 * np.pi * self.freq_meep
+
+        self.component = component if isinstance(component, str) else {1: "Hz", 4: "Ez"}.get(component, component)
+        if self.component not in ("Ez", "Hz"):
+            raise ValueError(f"component must be 'Ez' or 'Hz', got {component!r}")
+        self.center, self.size = center, size
+        size_x, size_y = (size.x, size.y) if hasattr(size, "y") else (size[0], size[1])
+        if size_x != 0:
+            raise ValueError("the source line must lie along y (size x = 0)")
+
+        self.angle = float(angle)
+        self.s = 1 if np.cos(np.radians(self.angle)) > 0 else -1  # emission side
+        self.tilt = np.degrees(np.arcsin(np.sin(np.radians(self.angle))))  # beam axis w.r.t. the x axis
+        self.theta_max = float(theta_max)
+        if abs(self.tilt) >= self.theta_max:
+            raise ValueError(f"beam tilt {self.tilt:.1f} deg must stay below theta_max = {self.theta_max:g} deg")
+
+        self.half_length = 0.5 * float(size_y)
+        n_y = int(np.ceil(2 * self.half_length * points_per_wvl / self.wvl)) + 1
+        self.y = np.linspace(-self.half_length, self.half_length, n_y)
+
+        self.amplitude = amplitude
+        self.huygens_sign = huygens_sign
+        self.kwargs = kwargs
+        self.label = label
+
+        # Out-of-plane field F and partner G on the line, peak |F| = amplitude
+        F, C = self.line_fields()
+        scale = amplitude / np.abs(F).max()
+        self.partner_sign = -1 if self.component == "Ez" else 1  # Hy = -s cos Ez ; Ey = +s cos Hz
+        self.field = scale * F
+        self.partner = scale * self.partner_sign * self.s * C
+        if self.component == "Ez":
+            self.electric, self.magnetic = self.s * self.partner, self.s * self.field   # J_z = s Hy, M_y = s Ez
+        else:
+            self.electric, self.magnetic = -self.s * self.field, -self.s * self.partner  # J_y = -s Hz, M_z = -s Ey
+
+    @staticmethod
+    def parse_pat(path):
+        with open(path) as fh:
+            lines = [ln.strip() for ln in fh if ln.strip()]
+
+        f_start, f_stop, n_freq = lines[0].split()
+        n_theta, _ = lines[1].split()
+        phi_start, n_phi, d_phi = lines[2].split()
+        n_freq, n_theta, n_phi = int(n_freq), int(n_theta), int(n_phi)
+
+        freqs = np.linspace(float(f_start), float(f_stop), n_freq)
+        phis = float(phi_start) + float(d_phi) * np.arange(n_phi)
+
+        data = np.empty((n_freq, n_phi, n_theta, 5))
+        freq_header = []
+        freq_trailer = np.empty(n_freq)
+        i = 3
+        for fi in range(n_freq):
+            freq_header.append(lines[i:i + 2])
+            i += 2
+            for pi in range(n_phi):
+                assert lines[i].startswith("Plane cut phi="), f"line {i}: {lines[i]!r}"
+                phi_in_file = float(lines[i].split("=")[1].split()[0])
+                assert np.isclose(phi_in_file, phis[pi]), (phi_in_file, phis[pi])
+                i += 1
+                data[fi, pi] = np.loadtxt(lines[i:i + n_theta])
+                i += n_theta
+            freq_trailer[fi] = float(lines[i])
+            i += 1
+
+        return {
+            "freqs": freqs,
+            "phis": phis,
+            "theta": data[0, 0, :, 0],
+            "co_dB": data[..., 1],
+            "cx_dB": data[..., 2],
+            "co_phase": data[..., 3],
+            "cx_phase": data[..., 4],
+            "freq_header": freq_header,
+            "freq_trailer": freq_trailer,
+        }
+
+
+    @classmethod
+    def from_pat(cls, patfile, freq_ghz, phi, **kwargs):
+        """Build from the cut nearest to (freq_ghz, phi) in an RTCC .pat file."""
+        pat = cls.parse_pat(patfile)
+        fi = nearest_freq_indices(pat["freqs"], [freq_ghz])[0]
+        pi = int(np.argmin(np.abs(pat["phis"] - phi)))
+        if not np.isclose(pat["phis"][pi], phi):
+            print(f"  requested phi = {phi} deg -> using nearest {pat['phis'][pi]:g} deg")
+        kwargs.setdefault("label", f"{os.path.basename(patfile)}, φ = {pat['phis'][pi]:g}°")
+        return cls(pat["theta"], pat["co_dB"][fi, pi], pat["co_phase"][fi, pi], pat["freqs"][fi], **kwargs)
+
+    def pattern(self, psi):
+        """Complex far field at psi [deg] from the beam axis (mirror-symmetric, zero beyond the cut)."""
+        a = np.abs(psi)
+        val = np.interp(a, self.theta, self.cut_field.real) + 1j * np.interp(a, self.theta, self.cut_field.imag)
+        return np.where(a <= self.theta[-1], val, 0)
+
+    def edge_taper(self, theta_line):
+        """Raised-cosine roll-off of plane waves between theta_max and grazing incidence."""
+        t = np.clip((np.abs(theta_line) - self.theta_max) / (90.0 - self.theta_max), 0, 1)
+        return np.cos(0.5 * np.pi * t) ** 2
+
+    def angular_spectrum(self, tilt_deg=None):
+        """Plane-wave spectrum E~(k_y) on a uniform k_y grid strictly inside (-k, k).
+
+        The k_y step makes the alias period of the line field 4x the half-length, so the
+        discretised inverse transform is clean over the whole source line.
+        Returns (k_y, E~, cos theta).
+        """
+        tilt = self.tilt if tilt_deg is None else tilt_deg
+        dky = np.pi / (2 * self.half_length)
+        n = int(np.ceil(self.k / dky))
+        ky = dky * np.arange(-n + 1, n)
+        cos_t = np.sqrt(1 - (ky / self.k) ** 2)
+        theta_line = np.degrees(np.arcsin(ky / self.k))
+        spec = self.pattern(theta_line - tilt) * self.edge_taper(theta_line) / cos_t
+        return ky, spec, cos_t
+
+    def line_fields(self, y=None, tilt_deg=None):
+        """Unnormalised F(y) and C(y) = int cos(theta) E~ exp(i k_y y) dk_y (partner field up to sign)."""
+        y = self.y if y is None else np.asarray(y, float)
+        ky, spec, cos_t = self.angular_spectrum(tilt_deg)
+        dky = ky[1] - ky[0]
+        return sum_exp(y, ky, spec * dky, +1), sum_exp(y, ky, cos_t * spec * dky, +1)
+
+    def reconstructed_far_field(self, theta_line):
+        """Far field radiated by the finite, sampled line profile: cos(theta) * FT[F](k sin theta)."""
+        ky = self.k * np.sin(np.radians(theta_line))
+        dy = self.y[1] - self.y[0]
+        return np.cos(np.radians(theta_line)) * sum_exp(ky, self.y, self.field * dy, -1) / (2 * np.pi)
+
+    def line_power_fraction(self):
+        """Power flowing through the finite source line / total power of the (tapered) spectrum."""
+        ky, spec, cos_t = self.angular_spectrum()
+        F, C = self.line_fields()
+        p_line = np.real(F * np.conj(C)).sum() * (self.y[1] - self.y[0])
+        p_total = 2 * np.pi * (np.abs(spec) ** 2 * cos_t).sum() * (ky[1] - ky[0])
+        return p_line / p_total
+
+    def phase_centre(self, fit_level=-10.0):
+        """Phase-centre distance [mm] behind the pattern's reference plane, from
+        phase(theta) = phi0 - k * delta * (1 - cos theta) fitted over the main beam."""
+        mask = main_beam_mask(self.co_dB, fit_level)
+        slope, _ = np.polyfit(1 - np.cos(np.radians(self.theta[mask])), self.phase[mask], 1)
+        return -slope / self.k
+
+    def gaussicity(self, w0=None, fit_level=-10.0):
+        """Power overlap of the (untilted) line field with a Gaussian waist exp(-y^2/w0^2) at the line.
+
+        Default w0 is the equivalent waist of analysing_data (Gaussian fit of the main beam).
+        Returns (eta, w0).
+        """
+        if w0 is None:
+            w0 = waist_from_fwhm(fit_gaussian(self.theta, self.co_dB, fit_level)[0], self.freq_ghz)
+        F, _ = self.line_fields(tilt_deg=0)
+        G = np.exp(-(self.y / w0) ** 2)
+        eta = np.abs(np.sum(F * G)) ** 2 / (np.sum(np.abs(F) ** 2) * np.sum(G ** 2))
+        return eta, w0
+
+    def assemble(self):
+        """Return [electric-current source, magnetic-current source] for mp.Simulation(sources=...)."""
+        import meep as mp
+
+        comp_e, comp_m = {"Ez": (mp.Ez, mp.Hy), "Hz": (mp.Ey, mp.Hz)}[self.component]
+        center = self.center if isinstance(self.center, mp.Vector3) else mp.Vector3(*self.center)
+        size = self.size if isinstance(self.size, mp.Vector3) else mp.Vector3(*self.size)
+        src_kwargs = self.kwargs or {}
+
+        def amp_func_from(values):
+            # P is relative to the source centre
+            return lambda P: complex(np.interp(P.y, self.y, values.real) + 1j * np.interp(P.y, self.y, values.imag))
+
+        sources = [mp.Source(mp.ContinuousSource(frequency=self.freq_meep, **src_kwargs),
+                             component=comp_e, center=center, size=size,
+                             amp_func=amp_func_from(self.electric)),
+                   mp.Source(mp.ContinuousSource(frequency=self.freq_meep, **src_kwargs),
+                             component=comp_m, center=center, size=size,
+                             amp_func=amp_func_from(self.huygens_sign * self.magnetic))]
+        print(f"Feedhorn pattern source assembled: {self.label}, {self.freq_ghz:g} GHz "
+              f"(f_meep = {self.freq_meep:.4f}), {self.component}, angle {self.angle:g} deg")
+        # Print the component names:
+        print(f"  sources: {self.component_names()}")
+        
+        return sources
+
+
+    def component_names(self):
+        return "J_z (Ez) + M_y (Hy)" if self.component == "Ez" else "J_y (Ey) + M_z (Hz)"
+
+    def summary(self):
+        eta, w0 = self.gaussicity()
+        return "\n".join([
+            f"{self.label}",
+            f"  frequency           {self.freq_ghz:g} GHz  (f_meep = {self.freq_meep:.5f}, λ = {self.wvl:.4f} mm)",
+            f"  polarisation        {self.component} out of plane -> sources {self.component_names()}",
+            f"  beam                angle {self.angle:g} deg (emits towards {'+' if self.s > 0 else '-'}x, "
+            f"tilt {self.tilt:+.2f} deg)",
+            f"  source line         {2 * self.half_length:g} mm, {self.y.size} samples",
+            f"  power off the line  {1 - self.line_power_fraction():.2e} (truncation by the finite line)",
+            f"  phase centre        {self.phase_centre():+.3f} mm behind the reference plane",
+            f"  equivalent w0       {w0:.3f} mm,  Gaussicity η = {eta:.4f}",
+        ])
+
+    def plot_aperture_fields(self, floor_dB=-60.0):
+        """Line field amplitude and phase, and the input cut vs the far field of the line profile."""
+        partner_name = "Hy" if self.component == "Ez" else "Ey"
+        F_dB = 20 * np.log10(np.abs(self.field) / np.abs(self.field).max() + 1e-300)
+        G_dB = 20 * np.log10(np.abs(self.partner) / np.abs(self.field).max() + 1e-300)
+        inside = np.nonzero(F_dB > floor_dB + 10)[0]
+        y_lim = max(abs(self.y[inside[0]]), abs(self.y[inside[-1]]), 2 * self.wvl)
+        main = F_dB > -30
+
+        theta_line = np.linspace(-90, 90, 721)
+        ref = np.abs(self.pattern(theta_line - self.tilt)) ** 2
+        rec = np.abs(self.reconstructed_far_field(theta_line)) ** 2
+        ref_dB = 10 * np.log10(ref / ref.max() + 1e-300)
+        rec_dB = 10 * np.log10(rec / rec.max() + 1e-300)
+
+        fig, (ax_a, ax_p, ax_f) = plt.subplots(1, 3, figsize=(16, 4.4))
+        ax_a.plot(self.y, F_dB, color=PHI_COLORS[0], lw=2, label=f"|{self.component}|")
+        ax_a.plot(self.y, G_dB, color=PHI_COLORS[1], lw=1.2, ls="--", label=f"|{partner_name}|")
+        ax_a.set_xlim(-y_lim, y_lim)
+        ax_a.set_ylim(floor_dB, 3)
+        ax_a.set_xlabel("y on the source line [mm]")
+        ax_a.set_ylabel("Field amplitude [dB]")
+        ax_a.set_title("Line field amplitude")
+
+        phase = np.degrees(np.unwrap(np.angle(self.field[main])))
+        ax_p.plot(self.y[main], phase - phase[np.argmax(np.abs(self.field[main]))], color=PHI_COLORS[0], lw=2)
+        ax_p.set_xlabel("y on the source line [mm]")
+        ax_p.set_ylabel(f"arg {self.component} [deg]")
+        ax_p.set_title("Line field phase (where |F| > −30 dB)")
+
+        ax_f.plot(theta_line, ref_dB, color="0.2", lw=2, label="input cut (.pat)")
+        ax_f.plot(theta_line, rec_dB, color=PHI_COLORS[2], lw=1.4, ls="--", label="radiated by the line profile")
+        for t in (-self.theta_max, self.theta_max):
+            ax_f.axvline(t, color="0.55", lw=0.8, ls=":")
+        ax_f.set_xlim(-90, 90)
+        ax_f.set_ylim(floor_dB, 3)
+        ax_f.set_xlabel("θ from the x axis [deg]")
+        ax_f.set_ylabel("Far-field power [dB]")
+        ax_f.set_title("Input pattern vs reconstructed far field")
+
+        for a in (ax_a, ax_p, ax_f):
+            style_axes(a)
+        for a in (ax_a, ax_f):
+            a.legend(fontsize=8, frameon=False, loc="lower left" if a is ax_f else "upper right")
+        fig.suptitle(f"{self.label} — {self.freq_ghz:g} GHz, {self.component}, angle {self.angle:g}°")
+        fig.tight_layout()
+        return fig
+
+
 # ~ CONTINUOUS PLANE WAVES
 class ContinuousPlaneWaves():
     """

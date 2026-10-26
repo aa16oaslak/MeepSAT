@@ -65,7 +65,7 @@
         "c2": -2.325625,
         "thick": 8,
         "diameter": 50,
-        "x": 70,
+        "x": -51,
         "y": 0,
         "AR_left_layers": [0.51],
         "AR_right_layers": [0.51],
@@ -78,7 +78,7 @@
           "lens1_mount": {
             "type": "square",
             "diameter": 50,
-            "pos_x": -48,
+            "pos_x": -51,
             "thickness": 2,
             "material": "mp.perfect_electric_conductor",
             "conductivity": "mp.inf",
@@ -88,7 +88,7 @@
           "aperture1": {
             "type": "square",
             "diameter": 45,
-            "pos_x": -60,
+            "pos_x": -61,
             "thickness": 2,
             "material": "mp.perfect_electric_conductor",
             "conductivity": "mp.inf",

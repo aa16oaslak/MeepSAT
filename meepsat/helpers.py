@@ -262,3 +262,55 @@ def rotation_matrix(tx, ty, tz):
     Equivalent to: Rz @ Ry @ Rx
     """
     return rot_z(tz) @ rot_y(ty) @ rot_x(tx)
+
+
+# Helpers for FeedHorn Source in meep_geometry.py
+C_MM_GHZ = 299.792458  # speed of light [mm GHz]
+PHI_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+
+def fit_gaussian(theta, co_dB, fit_level=-10.0):
+    """Fit a boresight-centred Gaussian power beam to the main lobe.
+
+    In dB a Gaussian is a parabola in theta^2:  P_dB = a + b*theta^2  with
+    b = -10/ln(10) / (2 sigma^2), so this is a closed-form linear least-squares
+    fit (no initial guess to diverge from). Returns (fwhm_deg, peak_dB, sigma_deg).
+    """
+    mask = main_beam_mask(co_dB, fit_level)
+    if mask.sum() < 3:
+        return np.nan, np.nan, np.nan
+    b, a = np.polyfit(theta[mask] ** 2, co_dB[mask], 1)
+    if b >= 0:
+        return np.nan, a, np.nan
+    sigma = np.sqrt(-DB_PER_NEPER_POWER / (2.0 * b))
+    return FWHM_PER_SIGMA * sigma, a, sigma
+
+def main_beam_mask(co_dB, level):
+    """Contiguous points from boresight down to the first drop below `level` dB."""
+    below = np.nonzero(co_dB < level)[0]
+    stop = below[0] if below.size else co_dB.size
+    mask = np.zeros(co_dB.size, bool)
+    mask[:stop] = True
+    return mask
+
+def nearest_freq_indices(freqs, wanted):
+    idx = [int(np.argmin(np.abs(freqs - f))) for f in wanted]
+    for f, fi in zip(wanted, idx):
+        if not np.isclose(freqs[fi], f):
+            print(f"  requested {f} GHz -> using nearest {freqs[fi]:.2f} GHz")
+    return idx
+
+def style_axes(ax):
+    ax.grid(True, color="0.88", lw=0.8)
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+
+def waist_from_fwhm(fwhm_deg, freq_ghz):
+    """Waist radius w0 [mm] (1/e field, 1/e^2 power) of the Gaussian beam with this far-field FWHM.
+
+    Far field of a Gaussian beam: P ~ exp(-2 theta^2 / theta0^2) with theta0 = lambda / (pi w0),
+    so theta0 = FWHM / sqrt(2 ln 2) and w0 = lambda / (pi theta0).
+    """
+    wavelength = C_MM_GHZ / freq_ghz
+    theta0 = np.radians(fwhm_deg) / FWHM_PER_W0
+    return wavelength / (np.pi * theta0)
