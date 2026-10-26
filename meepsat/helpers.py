@@ -267,6 +267,9 @@ def rotation_matrix(tx, ty, tz):
 # Helpers for FeedHorn Source in meep_geometry.py
 C_MM_GHZ = 299.792458  # speed of light [mm GHz]
 PHI_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+FWHM_PER_SIGMA = 2.0 * np.sqrt(2.0 * np.log(2.0))
+FWHM_PER_W0 = np.sqrt(2.0 * np.log(2.0))  # power FWHM / (1/e field radius), same in angle and in space
+DB_PER_NEPER_POWER = 10.0 / np.log(10.0)
 
 def fit_gaussian(theta, co_dB, fit_level=-10.0):
     """Fit a boresight-centred Gaussian power beam to the main lobe.

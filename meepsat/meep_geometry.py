@@ -255,7 +255,17 @@ def set_broadband_freq_wvl(self, central_wvl=None, wvl_min=None, wvl_max=None):
 
 ###& SOURCE
 # ~ Feedhorn Source from a beam profile
-from helpers import (C_MM_GHZ, PHI_COLORS, fit_gaussian, main_beam_mask, nearest_freq_indices, style_axes, waist_from_fwhm)
+from meepsat.helpers import (C_MM_GHZ, PHI_COLORS, fit_gaussian, main_beam_mask, nearest_freq_indices, style_axes,
+                             waist_from_fwhm)
+
+
+def sum_exp(out_x, in_x, values, sign, chunk=512):
+    """sum_j values_j exp(sign i out_x_m in_x_j) for every m, chunked to bound memory."""
+    out = np.empty(len(out_x), complex)
+    for i in range(0, len(out_x), chunk):
+        out[i:i + chunk] = np.exp(sign * 1j * np.outer(out_x[i:i + chunk], in_x)) @ values
+    return out
+
 
 class FeedhornPatternSource:
     """Equivalent-current line source (along y) reproducing a feedhorn far-field cut in 2D MEEP."""
