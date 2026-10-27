@@ -44,7 +44,7 @@ class AsphericLens(object):
                  #! Single ARC parameters (useless- but not touching for now to avoid bugs)       
                  AR_left = None, 
                  AR_right = None,
-                 AR_material = 1.52/4,
+                 AR_material = None,
                  #! Parameters for multi-layer ARCs (single + multi-layer can be used simultaneously)
                  AR_left_layers = None,
                  AR_left_materials = None,
@@ -123,20 +123,26 @@ class AsphericLens(object):
             Anti Reflection coating thickness of right surface of the lens
             (default : None) 
         AR_material : float, optional
-            Refractive index of the AR coating material
+            Refractive index of the AR coating material; it is squared into a
+            permittivity when written, like n_refr
+            (default : None, i.e. sqrt(n_refr), the quarter-wave index)
 
         #! Parameters for multi-layer ARCs (single + multi-layer can be used simultaneously)
         AR_left_layers : list, optional
-            List of thicknesses of each layer in the multi-layer ARC on the left surface
+            List of thicknesses of each layer in the multi-layer ARC on the left surface,
+            starting from the layer on the lens
             (default : None)
         AR_left_materials : list, optional
-            List of refractive indices of each layer in the multi-layer ARC on the left surface
+            List of refractive indices (NOT permittivities) of each layer in the
+            multi-layer ARC on the left surface; they are squared when written
             (default : None)
         AR_right_layers : list, optional
-            List of thicknesses of each layer in the multi-layer ARC on the right surface
+            List of thicknesses of each layer in the multi-layer ARC on the right surface,
+            starting from the layer on the lens
             (default : None)
         AR_right_materials : list, optional
-            List of refractive indices of each layer in the multi-layer ARC on the right surface
+            List of refractive indices (NOT permittivities) of each layer in the
+            multi-layer ARC on the right surface; they are squared when written
             (default : None)
 
 
@@ -159,8 +165,9 @@ class AsphericLens(object):
         step_ARC_width : float, optional
             Width of the stepped pyramid ARC (default : None)
 
-        step_ARC_material : float, optional
-            Refractive index of the stepped pyramid ARC material (default : None)
+        step_ARC_material : mp.Medium or float, optional
+            Material of the stepped pyramid ARC, as an mp.Medium or as its
+            refractive index (default : None)
 
         step_ARC_angle : str, optional
             Angle of the stepped pyramid ARC, either 'perpendicular_to_surface' or None
@@ -227,7 +234,8 @@ class AsphericLens(object):
         #! Single ARC parameters (useless- but not touching for now to avoid bugs)       
         self.AR_left = AR_left          
         self.AR_right = AR_right        
-        self.AR_material = AR_material #!material of the AR coating  
+        # Refractive index of the AR coating, the quarter-wave index sqrt(n_refr) if not given
+        self.AR_material = np.sqrt(n_refr) if AR_material is None else AR_material
 
         #! Parameters for multi-layer ARCs (single + multi-layer can be used simultaneously)
         self.left_layers=AR_left_layers 
@@ -243,6 +251,9 @@ class AsphericLens(object):
             self.step_ARC_kerf = step_ARC_kerf
             self.step_ARC_depth = step_ARC_depth
             self.step_ARC_width = step_ARC_width
+            # A plain number is the refractive index of the ARC material
+            if isinstance(step_ARC_material, (int, float)):
+                step_ARC_material = mp.Medium(index=step_ARC_material)
             self.step_ARC_material = step_ARC_material
             self.step_ARC_angle = step_ARC_angle
             self.step_ARC_rot_axis = step_ARC_rot_axis
@@ -664,13 +675,14 @@ class AsphericLens(object):
             axial_slope = comp.axial_slope/res
             if radial_slope != 0 or axial_slope != 0 : 
             
-                eps0 = comp.eps
+                n0 = np.sqrt(comp.eps)
                 x0 = np.int64(np.around((comp.x + self.half_cell_x)*res))
-                x_range = range(x_left, x_right+1) 
-                #The value is squared as the permittivity is index squared
-                eps_line = [eps0 + 
-                            (y_res*radial_slope)**2 + 
-                            ((k-x0)*axial_slope)**2 for k in x_range]
+                x_range = range(x_left, x_right+1)
+                #The slopes are in the index, so the index is built first
+                #and then squared, as the permittivity is index squared
+                eps_line = [(n0 +
+                             y_res*radial_slope +
+                             (k-x0)*axial_slope)**2 for k in x_range]
             if radial_slope ==0 and axial_slope == 0 :
                 eps_line = comp.eps
 
@@ -680,8 +692,8 @@ class AsphericLens(object):
             err_left_pos = int(err_left[err_bin_idx])
             err_left_neg = int(err_left[- err_bin_idx])
 
-            err_right_pos = int(err_left[err_bin_idx]) 
-            err_right_neg = int(err_left[- err_bin_idx])
+            err_right_pos = int(err_right[err_bin_idx])
+            err_right_neg = int(err_right[- err_bin_idx])
 
             x_left_neg = int(x_left + err_left_neg)
             x_left_pos = int(x_left + err_left_pos)
@@ -699,32 +711,35 @@ class AsphericLens(object):
                 #Write lens between left and right surface above optical axis
                 eps_map[x_left_pos: x_right_pos+1, y_positive] *= eps_line
             
+            #AR_material is a refractive index, the map holds permittivity
+            AR_eps = comp.AR_material**2
+
             #Write AR coating on left surface
             if comp.AR_left is not None :
 
                 AR_thick = np.int64(np.around(comp.AR_left*res))
 
                 if write_neg :
-                    eps_map[x_left_neg - AR_thick - delam_neg_L: x_left_neg - 
-                            delam_neg_L, y_negative] *= comp.AR_material
+                    eps_map[x_left_neg - AR_thick - delam_neg_L: x_left_neg -
+                            delam_neg_L, y_negative] *= AR_eps
 
                 if write_pos :
-                    eps_map[x_left_pos - AR_thick - delam_pos_L: x_left_pos - 
-                            delam_pos_L, y_positive] *= comp.AR_material
-            
-            #Write AR coating on right surface                    
+                    eps_map[x_left_pos - AR_thick - delam_pos_L: x_left_pos -
+                            delam_pos_L, y_positive] *= AR_eps
+
+            #Write AR coating on right surface
             if comp.AR_right is not None :
-                
+
                 AR_thick = np.int64(np.around(comp.AR_right*res))
 
                 if write_neg :
-                    eps_map[x_right_neg + 1 + delam_neg_R: AR_thick + x_right_neg + 
-                            1 + delam_neg_R, y_negative] *= comp.AR_material
+                    eps_map[x_right_neg + 1 + delam_neg_R: AR_thick + x_right_neg +
+                            1 + delam_neg_R, y_negative] *= AR_eps
 
                 if write_pos :
-                    eps_map[x_right_pos + 1 + delam_pos_R: AR_thick + 
-                            x_right_pos + 1 + delam_pos_R, 
-                            y_positive] *= comp.AR_material
+                    eps_map[x_right_pos + 1 + delam_pos_R: AR_thick +
+                            x_right_pos + 1 + delam_pos_R,
+                            y_positive] *= AR_eps
                     
                     
     
@@ -890,13 +905,17 @@ class AsphericLens(object):
         res : float
             Resolution of map
         AR_left_layers : list of float, optional
-            List of thicknesses for each AR coating layer on the left surface
+            List of thicknesses for each AR coating layer on the left surface,
+            starting from the layer on the lens
         AR_left_materials : list of float, optional
-            List of permittivity values for each AR coating layer on the left surface
+            List of refractive indices for each AR coating layer on the left
+            surface; they are squared into permittivities when written
         AR_right_layers : list of float, optional
-            List of thicknesses for each AR coating layer on the right surface
+            List of thicknesses for each AR coating layer on the right surface,
+            starting from the layer on the lens
         AR_right_materials : list of float, optional
-            List of permittivity values for each AR coating layer on the right surface
+            List of refractive indices for each AR coating layer on the right
+            surface; they are squared into permittivities when written
         '''
         # Validate AR coating parameters
         if AR_left_layers is not None and AR_left_materials is None:
@@ -980,13 +999,14 @@ class AsphericLens(object):
             radial_slope = comp.radial_slope/res
             axial_slope = comp.axial_slope/res
             if radial_slope != 0 or axial_slope != 0: 
-                eps0 = comp.eps
+                n0 = np.sqrt(comp.eps)
                 x0 = np.int64(np.around((comp.x + self.half_cell_x)*res))
-                x_range = range(x_left, x_right+1) 
-                # The value is squared as the permittivity is index squared
-                eps_line = [eps0 + 
-                            (y_res*radial_slope)**2 + 
-                            ((k-x0)*axial_slope)**2 for k in x_range]
+                x_range = range(x_left, x_right+1)
+                # The slopes are in the index, so the index is built first
+                # and then squared, as the permittivity is index squared
+                eps_line = [(n0 +
+                             y_res*radial_slope +
+                             (k-x0)*axial_slope)**2 for k in x_range]
             else:
                 eps_line = comp.eps
 
@@ -995,8 +1015,8 @@ class AsphericLens(object):
             err_left_pos = int(err_left[err_bin_idx])
             err_left_neg = int(err_left[- err_bin_idx])
 
-            err_right_pos = int(err_left[err_bin_idx]) 
-            err_right_neg = int(err_left[- err_bin_idx])
+            err_right_pos = int(err_right[err_bin_idx])
+            err_right_neg = int(err_right[- err_bin_idx])
 
             x_left_neg = int(x_left + err_left_neg)
             x_left_pos = int(x_left + err_left_pos)
@@ -1022,14 +1042,16 @@ class AsphericLens(object):
                 # Apply each layer, moving outward from the lens surface
                 for i, (layer_thick, material) in enumerate(zip(AR_left_layers, AR_left_materials)):
                     AR_thick = np.int64(np.around(layer_thick*res))
-                    
+                    # The materials are refractive indices, the map holds permittivity
+                    AR_eps = material**2
+
                     # Below optical axis
                     if write_neg:
-                        eps_map[start_pos_neg - AR_thick:start_pos_neg, y_negative] *= material
-                    
+                        eps_map[start_pos_neg - AR_thick:start_pos_neg, y_negative] *= AR_eps
+
                     # Above optical axis (if not on axis)
                     if write_pos:
-                        eps_map[start_pos_pos - AR_thick:start_pos_pos, y_positive] *= material
+                        eps_map[start_pos_pos - AR_thick:start_pos_pos, y_positive] *= AR_eps
                     
                     # Move starting position outward for next layer
                     start_pos_neg -= AR_thick
@@ -1044,14 +1066,16 @@ class AsphericLens(object):
                 # Apply each layer, moving outward from the lens surface
                 for i, (layer_thick, material) in enumerate(zip(AR_right_layers, AR_right_materials)):
                     AR_thick = np.int64(np.around(layer_thick*res))
-                    
+                    # The materials are refractive indices, the map holds permittivity
+                    AR_eps = material**2
+
                     # Below optical axis
                     if write_neg:
-                        eps_map[start_pos_neg:start_pos_neg + AR_thick, y_negative] *= material
-                    
+                        eps_map[start_pos_neg:start_pos_neg + AR_thick, y_negative] *= AR_eps
+
                     # Above optical axis (if not on axis)
                     if write_pos:
-                        eps_map[start_pos_pos:start_pos_pos + AR_thick, y_positive] *= material
+                        eps_map[start_pos_pos:start_pos_pos + AR_thick, y_positive] *= AR_eps
                     
                     # Move starting position outward for next layer
                     start_pos_neg += AR_thick
@@ -1066,11 +1090,11 @@ class AsphericLens(object):
         left_layers: list of float
             Thicknesses of each AR coating layer on the left surface
         left_materials: list of float
-            Permittivity values for each AR coating layer on the left surface
+            Refractive indices for each AR coating layer on the left surface
         right_layers: list of float
             Thicknesses of each AR coating layer on the right surface
         right_materials: list of float
-            Permittivity values for each AR coating layer on the right surface
+            Refractive indices for each AR coating layer on the right surface
         """
         self.write_lens_nARC(self, self.permittivity_map, self.res,
                         AR_left_layers=self.left_layers,
@@ -1085,10 +1109,10 @@ class AsphericLens(object):
 
     # # Define the AR coating layers
     # left_layers = [0.25, 0.3, 0.15]  # Three layers with different thicknesses
-    # left_materials = [1.4, 1.2, 1.3]  # Corresponding refractive indices squared
+    # left_materials = [1.4, 1.2, 1.3]  # Corresponding refractive indices
 
     # right_layers = [0.2, 0.25]  # Two layers on the right surface
-    # right_materials = [1.3, 1.2]  # Corresponding refractive indices squared
+    # right_materials = [1.3, 1.2]  # Corresponding refractive indices
 
     # # Apply the multi-layer AR coatings
     # lens.assemble_with_multi_arc(
