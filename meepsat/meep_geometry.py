@@ -1109,6 +1109,37 @@ def ensure_ccw_order(vertices):
 
 #& APERTURE STOP
 
+def lossy_medium(epsilon_real, epsilon_imag=0.0, mu_real=1.0, mu_imag=0.0, freq=1/3):
+    """
+    Returns an mp.Medium with a complex permittivity and permeability at one frequency
+
+    Meant for magnetically loaded absorbers such as ECCOSORB MF/CR, which are lossy in
+    both epsilon and mu. The imaginary parts become conductivities (narrow-band
+    absorption, as in meep.readthedocs.io/en/latest/Materials):
+        D_conductivity = eps_imag*2*pi*freq/eps_real
+        B_conductivity = mu_imag*2*pi*freq/mu_real
+    so eps'' and mu'' are exact at `freq` and fall off as 1/f away from it. Use a
+    dispersive (Lorentzian) fit instead for broadband runs.
+
+    Parameters
+    ----------
+    epsilon_real, epsilon_imag : float
+        Complex relative permittivity eps' + i eps'' at `freq` (eps'' > 0 is lossy)
+    mu_real, mu_imag : float, optional
+        Complex relative permeability mu' + i mu'' at `freq` (defaults: 1.0 and 0.0)
+    freq : float, optional
+        Frequency in MEEP units (1/length) at which the values hold (default: 1/3)
+
+    Returns
+    -------
+    mp.Medium
+    """
+    D_conductivity = epsilon_imag * 2 * np.pi * freq / epsilon_real
+    B_conductivity = mu_imag * 2 * np.pi * freq / mu_real
+
+    return mp.Medium(epsilon=epsilon_real, D_conductivity=D_conductivity,
+                     mu=mu_real, B_conductivity=B_conductivity)
+
 
 @dataclass
 class ApertureAbsorberLayer:
@@ -1131,15 +1162,19 @@ class ApertureAbsorberLayer:
         Thickness of the layer along the face normal. For a pyramidal layer
         this is the pyramid height, unless `height` is given separately.
     material : mp.Medium, optional
-        Material of the layer. If None, it is built from epsilon_real and
-        epsilon_imag (default: None)
+        Material of the layer. If None, it is built from epsilon_real/imag and
+        mu_real/imag with lossy_medium() (default: None)
     epsilon_real, epsilon_imag : float, optional
         Complex permittivity used when `material` is None. The imaginary part
         becomes a conductivity, D_conductivity = eps_imag*2*pi*freq/eps_real
         (defaults: 1.0 and 0.0)
+    mu_real, mu_imag : float, optional
+        Complex permeability used when `material` is None, for magnetically
+        loaded absorbers (e.g. ECCOSORB MF/CR). The imaginary part becomes
+        B_conductivity = mu_imag*2*pi*freq/mu_real (defaults: 1.0 and 0.0)
     freq : float, optional
-        Frequency at which epsilon_imag is converted to a conductivity
-        (default: 1/3)
+        Frequency at which epsilon_imag and mu_imag are converted to
+        conductivities (default: 1/3)
     shape : {'flat', 'pyramidal'}, optional
         'flat' places a slab covering the whole face; 'pyramidal' places a
         row of stepped pyramids on it, via PyramidalAbsorbers
@@ -1164,6 +1199,8 @@ class ApertureAbsorberLayer:
     material: mp.Medium = None
     epsilon_real: float = 1.0
     epsilon_imag: float = 0.0
+    mu_real: float = 1.0
+    mu_imag: float = 0.0
     freq: float = 1/3
     shape: Literal['flat', 'pyramidal'] = 'flat'
     blocks: Literal['both', 'up', 'down'] = 'both'
@@ -1196,16 +1233,12 @@ class ApertureAbsorberLayer:
         return self.thickness
 
     def get_material(self):
-        """The mp.Medium of the layer, built from epsilon if not given directly"""
+        """The mp.Medium of the layer, built from epsilon and mu if not given directly"""
         if self.material is not None:
             return self.material
 
-        if self.epsilon_imag:
-            # Narrow-band absorption, as in meep.readthedocs.io/en/latest/Materials
-            D_conductivity = self.epsilon_imag * 2 * np.pi * self.freq / self.epsilon_real
-            return mp.Medium(epsilon=self.epsilon_real, D_conductivity=D_conductivity)
-
-        return mp.Medium(epsilon=self.epsilon_real)
+        return lossy_medium(self.epsilon_real, self.epsilon_imag,
+                            self.mu_real, self.mu_imag, self.freq)
 
 
 class ApertureStop(object):
@@ -1231,7 +1264,12 @@ class ApertureStop(object):
                  print_vertices = False,
                  absorber_layers = None,
                  preserve_aperture = False,
-                 absorber_height = 1.0):
+                 absorber_on_tip = True,
+                 absorber_height = 1.0,
+                 arrow_height = None,
+                 arrow_base = None,
+                 arrow_angle = None,
+                 arrow_tip_offset = 0):
         '''
         Defines the attributes of the aperture stop object
 
@@ -1240,10 +1278,15 @@ class ApertureStop(object):
         mpsat_sim : object
             MEEPSAT simulation object
         type: str
-            Type of the aperture stop: 
-                circular, square, arrow, etc.
-        diameter : float 
-            Diameter of the aperture stop opening
+            Type of the aperture stop:
+                'square' - flat lip
+                'arrow'  - a triangular tip of the stop material on each lip,
+                           pointing into the opening. The blocks are pulled back
+                           by the tip height, so the opening between the tips
+                           is still `diameter`.
+        diameter : float
+            Diameter of the aperture stop opening (between the arrow tips for
+            type='arrow')
         pos_x : float, optional
             For a 'vertical' aperture stop: position of the left surface of
             the slab along the x-axis.
@@ -1289,10 +1332,30 @@ class ApertureStop(object):
             If True, blocks carrying absorber layers on their 'inner' side are
             pulled back by the thickness of that stack, so the clear opening
             left between the absorbers is exactly `diameter` (default : False,
-            i.e. the absorbers eat into the opening).
+            i.e. the absorbers eat into the opening). On an arrow tip the
+            coating reaches further out at the apex than its thickness, and
+            that is what gets pulled back.
+        absorber_on_tip : bool, optional
+            If False, the 'inner' absorber layers are left out, so the lip (the
+            arrow tip for type='arrow') stays bare stop material while the
+            front/back layers are kept. They then end flush with the lip faces
+            (default : True)
         absorber_height : float, optional
-            Height along z of the absorber prisms; irrelevant in a 2D
-            simulation (default : 1.0)
+            Height along z of the absorber and arrow tip prisms; irrelevant in
+            a 2D simulation (default : 1.0)
+        arrow_height, arrow_base, arrow_angle : float, optional
+            Shape of the arrow tip, for type='arrow'. arrow_height is how far
+            the tip sticks out of the lip into the opening, arrow_base the
+            length of lip it sits on (at most `thickness`, centred on it) and
+            arrow_angle the full opening angle of the tip in degrees. Give
+            arrow_height and/or arrow_angle, plus optionally arrow_base;
+            arrow_base defaults to `thickness` when it cannot be worked out
+            from the other two (defaults : None).
+        arrow_tip_offset : float, optional
+            Shift of the apex across the thickness, from the middle of the
+            base towards the back face (negative: towards the front face). Use
+            +-thickness/2 with arrow_base = thickness for a one-sided bevel
+            (knife edge). Not allowed together with arrow_angle (default : 0)
         '''
         self.mpsat_sim = mpsat_sim
         self.type = type                
@@ -1342,12 +1405,30 @@ class ApertureStop(object):
         self.y_size_offset = y_size_offset
         self._print_vertices = print_vertices
         self.blocks = None      # Filled in once the aperture stop is assembled
+        self.tips = None        # Arrow tips, filled in with the blocks for type='arrow'
+
+        if self.type not in ('square', 'arrow'):
+            raise ValueError(f'Invalid aperture stop type: {self.type}. Choose "square" or "arrow".')
+
+        if self.type == 'arrow':
+            (self.arrow_height,
+             self.arrow_base,
+             self.arrow_tip_offset) = self._resolve_arrow(arrow_height, arrow_base,
+                                                          arrow_angle, arrow_tip_offset)
+            print(f"Arrow tip: height = {self.arrow_height:.6g}, base = {self.arrow_base:.6g}, "
+                  f"tip offset = {self.arrow_tip_offset:.6g}")
 
         # Absorber layers on the faces of the stop
         self.absorber_layers = self._normalise_absorber_layers(absorber_layers)
         self.preserve_aperture = preserve_aperture
+        self.absorber_on_tip = absorber_on_tip
         self.absorber_height = absorber_height
         self.absorbers = None   # Filled in by get_absorbers()
+
+        if self.type == 'arrow' and any(layer.shape == 'pyramidal'
+                                        for layer in self._layers_on('inner', 'both')):
+            raise ValueError("Pyramidal inner layers are not supported on an arrow tip. "
+                             "Use shape='flat' instead.")
 
         print(f"Aperture stop created with orientation: {self.orientation} "
               f"at (pos_x, pos_y) = ({self.pos_x}, {self.pos_y})")
@@ -1356,7 +1437,8 @@ class ApertureStop(object):
         if self.absorber_layers:
             sides = ', '.join(f'{layer.side}/{layer.shape}' for layer in self.absorber_layers)
             print(f"Absorber layers requested on: {sides} "
-                  f"(preserve_aperture = {self.preserve_aperture})")
+                  f"(preserve_aperture = {self.preserve_aperture}, "
+                  f"absorber_on_tip = {self.absorber_on_tip})")
 
 
     @staticmethod
@@ -1387,21 +1469,198 @@ class ApertureStop(object):
 
     def _layers_on(self, side, block):
         '''
-        Returns the absorber layers on one side of one block ('up' or 'down'),
-        in the order they are stacked outwards from the face
+        Returns the absorber layers on one side of one block ('up', 'down' or
+        'both' for either), in the order they are stacked outwards from the
+        face. The 'inner' side is empty when absorber_on_tip is False.
         '''
+        if side == 'inner' and not self.absorber_on_tip:
+            return []
+
         return [layer for layer in self.absorber_layers
-                if layer.side == side and layer.blocks in ('both', block)]
+                if layer.side == side and (block == 'both' or layer.blocks in ('both', block))]
 
-    def _aperture_inset(self, block):
+    def _resolve_arrow(self, height, base, angle, tip_offset):
         '''
-        How far the given block is pulled back from the opening so that the
-        inner absorber stack does not eat into the clear aperture
+        Works out the height and base of the arrow tip from the arrow_*
+        arguments, and checks they fit on the lip
+
+        Returns
+        -------
+        tuple
+            (height, base, tip_offset)
         '''
+        if height is not None and base is not None and angle is not None:
+            raise ValueError("Give at most two of arrow_height, arrow_base and arrow_angle.")
+        if height is None and angle is None:
+            raise ValueError("An 'arrow' aperture stop needs arrow_height or arrow_angle.")
+
+        if angle is not None:
+            if tip_offset != 0:
+                raise ValueError("arrow_angle assumes a centred tip: give arrow_height and "
+                                 "arrow_base instead when arrow_tip_offset is not 0.")
+            if not 0 < angle < 180:
+                raise ValueError(f"arrow_angle must be between 0 and 180 degrees, not {angle}.")
+            half_angle = math.radians(angle) / 2
+            if height is None:
+                if base is None:
+                    base = self.thick
+                height = (base / 2) / math.tan(half_angle)
+            else:
+                base = 2 * height * math.tan(half_angle)
+
+        if base is None:
+            base = self.thick
+
+        if height <= 0:
+            raise ValueError(f"arrow_height must be positive, not {height}.")
+        if not 0 < base <= self.thick * (1 + 1e-9):
+            raise ValueError(f"The arrow base ({base:.6g}) must be positive and fit on the "
+                             f"lip, i.e. be at most the thickness ({self.thick}).")
+        if abs(tip_offset) > self.thick / 2 * (1 + 1e-9):
+            raise ValueError(f"arrow_tip_offset ({tip_offset}) puts the tip outside the slab: "
+                             f"keep it within +-{self.thick / 2}.")
+
+        return height, min(base, self.thick), tip_offset
+
+    def _lip_profile(self):
+        '''
+        Returns the outline of the lip in its own frame, as (u, v) points
+        running from the front face to the back face. u is the distance out of
+        the lip face into the opening, v the position across the thickness
+        (0 in the middle, positive towards the back face).
+        '''
+        half_t = self.thick / 2
+        if self.type != 'arrow':
+            return [(0, -half_t), (0, half_t)]
+
+        half_b = self.arrow_base / 2
+        points = [(0, -half_t), (0, -half_b),
+                  (self.arrow_height, self.arrow_tip_offset),
+                  (0, half_b), (0, half_t)]
+
+        # Drop repeated points, i.e. when the base is as wide as the slab
+        profile = [points[0]]
+        for point in points[1:]:
+            if not np.allclose(point, profile[-1]):
+                profile.append(point)
+
+        # A tip flush with the front/back face (a bevel) makes that face run on to the tip
+        if np.isclose(profile[1][1], -half_t):
+            profile.pop(0)
+        if np.isclose(profile[-2][1], half_t):
+            profile.pop()
+
+        return profile
+
+    @staticmethod
+    def _intersect(line_1, line_2):
+        '''Intersection of two lines in the lip frame, each given as (point, direction)'''
+        (p1, d1), (p2, d2) = line_1, line_2
+        s, _ = np.linalg.solve(np.column_stack([d1, -d2]), p2 - p1)
+        return p1 + s * d1
+
+    def _offset_lines(self, distance):
+        '''
+        Lines of the lip profile segments pushed out by `distance` along their
+        outward normals, as (point, direction) in the lip frame
+        '''
+        points = np.asarray(self._lip_profile(), dtype=float)
+        segments = np.diff(points, axis=0)
+        # The profile runs front -> back with the stop on its left, so the
+        # outward normal of (du, dv) is (dv, -du)
+        normals = np.column_stack([segments[:, 1], -segments[:, 0]])
+        normals /= np.linalg.norm(normals, axis=1)[:, None]
+
+        return [(points[i] + distance * normals[i], segments[i]) for i in range(len(segments))]
+
+    def _face_line(self, side, distance):
+        '''The front/back face plane pushed out by `distance`, in the lip frame'''
+        sign = -1 if side == 'front' else 1
+        return (np.array([0.0, sign * (self.thick / 2 + distance)]), np.array([1.0, 0.0]))
+
+    def _stack(self, which, side):
+        '''
+        (depth, flat) of the absorber stack on one side of one block ('up' or
+        'down'): its total thickness, and whether all its layers are flat
+        '''
+        layers = self._layers_on(side, which)
+        return (sum(layer.extent for layer in layers),
+                all(layer.shape == 'flat' for layer in layers))
+
+    def _joints(self, which):
+        '''
+        Returns the lines, in the lip frame, along which the front and back
+        absorber stacks of the given block meet its lip stack
+
+        Flat stacks are mitred: the joint runs from the corner of the stop to
+        where the outer surfaces of the two stacks meet, so the absorber
+        follows the outline of the stop round the corner with no step, even
+        when the two stacks differ in thickness. A lip stack is cut off by the
+        face plane when that face has no flat stack, and a flat face stack is
+        squared off against a pyramidal lip stack.
+        '''
+        lip_depth, lip_flat = self._stack(which, 'inner')
+        profile = self._lip_profile()
+        lip_lines = self._offset_lines(lip_depth)
+        ends = {'front': (profile[0], lip_lines[0]), 'back': (profile[-1], lip_lines[-1])}
+
+        joints = {}
+        for side, (corner, lip_line) in ends.items():
+            depth, flat = self._stack(which, side)
+            if depth == 0 or not flat:
+                joints[side] = self._face_line(side, 0)
+            elif not lip_flat:
+                joints[side] = (np.array([lip_depth, 0.0]), np.array([0.0, 1.0]))
+            else:
+                corner = np.asarray(corner, dtype=float)
+                outer = self._intersect(self._face_line(side, depth), lip_line)
+                joints[side] = (corner, outer - corner)
+
+        return joints
+
+    def _lip_chain(self, distance, joints):
+        '''
+        The lip profile pushed out by `distance`, with mitred corners and its
+        two ends cut by the joints, as (u, v) points from front to back
+        '''
+        lines = [joints['front']] + self._offset_lines(distance) + [joints['back']]
+        return [tuple(self._intersect(l1, l2)) for l1, l2 in zip(lines[:-1], lines[1:])]
+
+    def _plane_reach(self, which, side):
+        '''
+        How far out along a front/back face plane the lip and its stack reach,
+        for a face stack that is not mitred because it holds pyramids
+        '''
+        lip_depth, lip_flat = self._stack(which, 'inner')
+        if not lip_flat:
+            return lip_depth
+
+        end = 0 if side == 'front' else -1
+        return self._intersect(self._face_line(side, 0), self._offset_lines(lip_depth)[end])[0]
+
+    def _aperture_inset(self, which):
+        '''
+        How far the given block is pulled back from the opening: by the arrow
+        tip, and with preserve_aperture also by its absorbers, so that neither
+        eats into the clear aperture
+        '''
+        reach = max(u for u, v in self._lip_profile())
         if not self.preserve_aperture:
-            return 0
+            return reach
 
-        return sum(layer.extent for layer in self._layers_on('inner', block))
+        lip_depth, lip_flat = self._stack(which, 'inner')
+        if not lip_flat:
+            return reach + lip_depth
+
+        joints = self._joints(which)
+        points = self._lip_chain(lip_depth, joints) if lip_depth > 0 else []
+        # Outer corners of the mitred front/back stacks
+        for side in ('front', 'back'):
+            depth, flat = self._stack(which, side)
+            if depth > 0 and flat:
+                points.append(self._intersect(joints[side], self._face_line(side, depth)))
+
+        return max([reach] + [point[0] for point in points])
 
     def _check_block_sizes(self, size_up, size_down):
         '''
@@ -1414,18 +1673,22 @@ class ApertureStop(object):
                           "position/diameter of the aperture stop.")
         return max(size_up, 0), max(size_down, 0)
 
+    def _stop_material(self):
+        '''The mp.Medium of the aperture stop (blocks and arrow tips)'''
+        if self.material is not None:
+            return self.material
+
+        return mp.Medium(epsilon=self.permittivity,
+                         D_conductivity = self.conductivity)
+
     def square_aperture(self):
         '''
         Returns the block object for the aperture stop
         '''
-        if self.material is not None:
-            material = self.material
-        else:
-            material = mp.Medium(epsilon=self.permittivity, 
-                                D_conductivity = self.conductivity)
-        
-        # Half-opening seen by each block: with preserve_aperture the block is
-        # pulled back so its inner absorber stack ends on the clear aperture
+        material = self._stop_material()
+
+        # Half-opening seen by each block: the block is pulled back by the arrow
+        # tip and, with preserve_aperture, by its inner absorber stack
         half_open_up = self.diameter/2 + self._aperture_inset('up')
         half_open_down = self.diameter/2 + self._aperture_inset('down')
 
@@ -1512,15 +1775,23 @@ class ApertureStop(object):
         dict
             {'up': [v1, v2, v3, v4], 'down': [v1, v2, v3, v4]} where each
             vertex is an mp.Vector3. For a 'horizontal' aperture stop 'up'
-            is the +x (right) block and 'down' the -x (left) one.
+            is the +x (right) block and 'down' the -x (left) one. For
+            type='arrow' it also holds 'tip_up' and 'tip_down', the three
+            vertices of each arrow tip.
         '''
         if self.blocks is None:
             self._build()
 
         block_up, block_down = self.blocks
 
-        return {'up': self._block_vertices(block_up),
-                'down': self._block_vertices(block_down)}
+        vertices = {'up': self._block_vertices(block_up),
+                    'down': self._block_vertices(block_down)}
+
+        if self.tips is not None:
+            vertices['tip_up'] = list(self.tips[0].vertices)
+            vertices['tip_down'] = list(self.tips[1].vertices)
+
+        return vertices
 
     def print_vertices(self):
         '''
@@ -1547,6 +1818,12 @@ class ApertureStop(object):
             print(f'  {block_names[key]}:')
             for name, vertex in zip(corner_names, vertices[key]):
                 print(f'    {name} : x = {vertex.x:.6g}, y = {vertex.y:.6g}, z = {vertex.z:.6g}')
+
+        for key in ('tip_up', 'tip_down'):
+            if key in vertices:
+                print(f'  Arrow tip on the {block_names[key[4:]]}:')
+                for vertex in vertices[key]:
+                    print(f'    x = {vertex.x:.6g}, y = {vertex.y:.6g}, z = {vertex.z:.6g}')
 
         return vertices
 
@@ -1664,22 +1941,114 @@ class ApertureStop(object):
                           "the face it sits on has zero width.")
             return []
 
-        pyramids = PyramidalAbsorbers(mpsat_sim=self.mpsat_sim,
-                                      num_pyramids=layer.num_pyramids,
-                                      base_width=face_width / layer.num_pyramids,
-                                      top_width=layer.top_width,
-                                      height=layer.extent,
-                                      n_layers=layer.n_layers,
-                                      material=layer.get_material(),
-                                      freq=layer.freq,
-                                      edges=[edge],
-                                      add_substrate=False,
-                                      add_pec_backing=False,
-                                      name=f'{self.object_type} {layer.side} pyramids',
-                                      **coverage,
-                                      **kwargs)
+        # PyramidalAbsorbers still lives in the components_designing/pyramidal_absorbers
+        # tutorial, not in meepsat, so it is only used once it has been added here
+        pyramidal_absorbers = globals().get('PyramidalAbsorbers')
+        if pyramidal_absorbers is None:
+            raise NotImplementedError("Pyramidal aperture stop absorber layers need the "
+                                      "PyramidalAbsorbers class, which is not in "
+                                      "meepsat.meep_geometry yet. Use shape='flat' instead.")
+
+        pyramids = pyramidal_absorbers(mpsat_sim=self.mpsat_sim,
+                                       num_pyramids=layer.num_pyramids,
+                                       base_width=face_width / layer.num_pyramids,
+                                       top_width=layer.top_width,
+                                       height=layer.extent,
+                                       n_layers=layer.n_layers,
+                                       material=layer.get_material(),
+                                       freq=layer.freq,
+                                       edges=[edge],
+                                       add_substrate=False,
+                                       add_pec_backing=False,
+                                       name=f'{self.object_type} {layer.side} pyramids',
+                                       **coverage,
+                                       **kwargs)
 
         return pyramids.assemble()
+
+    def _lip_frame(self, block, which):
+        '''
+        Origin and axes of the lip frame of the given block: the middle of the
+        lip face, its outward normal (u) and the back face normal (v)
+        '''
+        vertex_a, vertex_b, lip_normal = self._face_geometry(block, 'inner', which)
+        _, _, back_normal = self._face_geometry(block, 'back', which)
+
+        return (vertex_a + vertex_b).scale(0.5), lip_normal, back_normal
+
+    def _lip_to_global(self, block, which, points):
+        '''
+        Maps (u, v) points from the lip frame of the given block to the cell
+        '''
+        centre, lip_normal, back_normal = self._lip_frame(block, which)
+
+        return [centre + lip_normal.scale(u) + back_normal.scale(v) for u, v in points]
+
+    def _arrow_tips(self):
+        '''
+        Returns the arrow tips of the two blocks, as mp.Prism triangles
+        standing on the lip faces
+        '''
+        half_b = self.arrow_base / 2
+        triangle = [(0, -half_b), (self.arrow_height, self.arrow_tip_offset), (0, half_b)]
+        material = self._stop_material()
+
+        tips = []
+        for which, block in zip(('up', 'down'), self.blocks):
+            vertices = ensure_ccw_order(self._lip_to_global(block, which, triangle))
+            tips.append(mp.Prism(vertices=vertices,
+                                 height=self.absorber_height,
+                                 axis=mp.Vector3(0, 0, 1),
+                                 material=material))
+
+        return tips
+
+    def _face_outline(self, block, which, side, inner, outer, joints):
+        '''
+        Outline, in the lip frame, of a flat layer between `inner` and `outer`
+        from a front/back face: from the far end of the block to the joint
+        with the lip stack
+        '''
+        vertex_a, vertex_b, _ = self._face_geometry(block, side, which)
+        centre, lip_normal, _ = self._lip_frame(block, which)
+        u_far = min((vertex - centre).dot(lip_normal) for vertex in (vertex_a, vertex_b))
+        far_end = (np.array([u_far, 0.0]), np.array([0.0, 1.0]))
+
+        line_in, line_out = self._face_line(side, inner), self._face_line(side, outer)
+
+        return [tuple(self._intersect(far_end, line_in)),
+                tuple(self._intersect(joints[side], line_in)),
+                tuple(self._intersect(joints[side], line_out)),
+                tuple(self._intersect(far_end, line_out))]
+
+    def _outline_prism(self, block, which, outline, layer):
+        '''
+        Returns an absorber layer with the given outline in the lip frame of
+        the block, as an mp.Prism
+        '''
+        return mp.Prism(vertices=ensure_ccw_order(self._lip_to_global(block, which, outline)),
+                        height=self.absorber_height,
+                        axis=mp.Vector3(0, 0, 1),
+                        material=layer.get_material())
+
+    def _extend_over_lip(self, block, which, side, vertex_a, vertex_b):
+        '''
+        Moves the opening end of a front/back face out to where the lip (arrow
+        tip and inner absorber stack) meets that face plane, so a layer on
+        that face also covers the end of the lip. Only used for stacks with
+        pyramids, which cannot be mitred.
+        '''
+        lip_extent = self._plane_reach(which, side)
+        if np.isclose(lip_extent, 0):
+            return vertex_a, vertex_b
+
+        _, _, lip_normal = self._face_geometry(block, 'inner', which)
+        reach = lip_normal.scale(lip_extent)
+
+        # The vertex further along the lip normal is the one at the opening
+        if (vertex_a - block.center).dot(lip_normal) > (vertex_b - block.center).dot(lip_normal):
+            return vertex_a + reach, vertex_b
+        return vertex_a, vertex_b + reach
 
     def get_absorbers(self):
         '''
@@ -1689,6 +2058,12 @@ class ApertureStop(object):
         The objects are NOT part of what assemble() returns, so add them to
         the MEEP geometry separately, e.g.
         mpsat_sim.meep_geometry.extend(stop.get_absorbers())
+
+        Flat stacks follow the outline of the stop: inner layers coat both
+        faces of an arrow tip, and the front/back stacks are mitred into the
+        lip stack at the corners, so the absorber surface has no gaps and no
+        steps. A front/back stack holding pyramids is instead widened over the
+        end of the lip stack.
 
         Returns
         -------
@@ -1711,23 +2086,40 @@ class ApertureStop(object):
         absorbers = []
 
         for which, block in blocks.items():
+            joints = self._joints(which)
+
             for side in ('front', 'back', 'inner'):
                 layers = self._layers_on(side, which)
                 if not layers:
                     continue
 
+                _, flat = self._stack(which, side)
                 vertex_a, vertex_b, normal = self._face_geometry(block, side, which)
+
+                # A front/back stack with pyramids cannot be mitred, so it reaches over
+                # the end of the lip stack instead, which still closes the corner
+                if side != 'inner' and not flat:
+                    vertex_a, vertex_b = self._extend_over_lip(block, which, side,
+                                                               vertex_a, vertex_b)
 
                 # Layers stack outwards from the face, in the order given
                 offset = 0
                 for layer in layers:
+                    inner, outer = offset, offset + layer.extent
                     if layer.shape == 'pyramidal':
                         absorbers.extend(self._pyramidal_absorber(vertex_a, vertex_b,
                                                                   normal, offset, layer))
-                    else:
+                    elif not flat:
                         absorbers.append(self._flat_absorber(vertex_a, vertex_b,
                                                              normal, offset, layer))
-                    offset += layer.extent
+                    elif side == 'inner':
+                        outline = (self._lip_chain(inner, joints)
+                                   + self._lip_chain(outer, joints)[::-1])
+                        absorbers.append(self._outline_prism(block, which, outline, layer))
+                    else:
+                        outline = self._face_outline(block, which, side, inner, outer, joints)
+                        absorbers.append(self._outline_prism(block, which, outline, layer))
+                    offset = outer
 
         self.absorbers = absorbers
         print(f'Aperture stop absorbers assembled: {len(absorbers)} objects from '
@@ -1737,12 +2129,16 @@ class ApertureStop(object):
 
     def _build(self):
         '''
-        Builds the block objects for the aperture stop according to the type
+        Builds the objects for the aperture stop according to the type: the two
+        blocks, plus the two arrow tips for type='arrow'
         '''
-        if self.type == 'square':
-            return self.square_aperture()
-        else:
-            raise ValueError(f'Invalid aperture stop type: {self.type}. Currently only "square" is supported.')
+        blocks = self.square_aperture()
+
+        if self.type == 'arrow':
+            self.tips = self._arrow_tips()
+            return blocks + tuple(self.tips)
+
+        return blocks
 
     def assemble(self):
         '''
@@ -1751,28 +2147,29 @@ class ApertureStop(object):
         Returns
         -------
         tuple
-            Two block objects (aperture_stop_up, aperture_stop_down)
+            (aperture_stop_up, aperture_stop_down) for type='square', and
+            (aperture_stop_up, aperture_stop_down, tip_up, tip_down) for
+            type='arrow'
         '''
-        blocks = self._build()
+        objects = self._build()
 
         if self._print_vertices:
             self.print_vertices()
 
-        return blocks
+        return objects
 
     def assemble_all(self):
         '''
-        Returns the aperture stop blocks together with their absorber layers
+        Returns the aperture stop objects together with their absorber layers
 
         Returns
         -------
         tuple
-            (aperture_stop_up, aperture_stop_down, absorbers), where absorbers
-            is the (possibly empty) list returned by get_absorbers()
+            The objects returned by assemble(), followed by absorbers, the
+            (possibly empty) list returned by get_absorbers(), e.g.
+            (aperture_stop_up, aperture_stop_down, absorbers) for type='square'
         '''
-        block_up, block_down = self.assemble()
-
-        return block_up, block_down, self.get_absorbers()
+        return (*self.assemble(), self.get_absorbers())
 
 
 ###& DETECTOR CLASS
