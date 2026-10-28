@@ -29,6 +29,9 @@ dependencies = [
     "memory-profiler"
 ]
 
+[project.scripts]
+meepsat-plot = "meepsat.visualization:main"
+
 [project.urls]
 Homepage = "https://github.com/aa16oaslak/MeepSAT.git"
 Repository = "https://github.com/aa16oaslak/MeepSAT.git"
